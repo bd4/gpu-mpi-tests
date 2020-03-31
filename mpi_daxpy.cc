@@ -64,7 +64,6 @@ void set_rank_device(int n_ranks, int rank) {
 
 int main(int argc, char **argv) {
     int n = 1024;
-
     int world_size, world_rank;
 
     double a = 2.0;
@@ -72,6 +71,8 @@ int main(int argc, char **argv) {
 
     double *x, *y, *d_x, *d_y;
     double *m_x, *m_y;
+
+    char *mb_per_core;
 
     MPI_Init(NULL, NULL);
 
@@ -91,8 +92,19 @@ int main(int argc, char **argv) {
     }
 
     for (int i=0; i<n; i++) {
-        x[i] = i+1;
+        x[i] =  i+1;
         y[i] = -i-1;
+    }
+
+    // DEBUG weirdness on summit where GENE can't see MEMORY_PER_CORE,
+    // possibly because the system spectrum mpi uses it in some way.
+    if (world_rank == 0) {
+        mb_per_core = getenv("MEMORY_PER_CORE");
+        if (mb_per_core == NULL) {
+            printf("MEMORY_PER_CORE is not set\n");
+        } else {
+            printf("MEMORY_PER_CORE=%s\n", mb_per_core);
+        }
     }
 
     set_rank_device(world_size, world_rank);
