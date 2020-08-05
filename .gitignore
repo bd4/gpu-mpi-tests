@@ -1,2 +1,5 @@
 daxpy
 mpi_daxpy
+daxpy_nvtx
+mpi_daxpy_nvtx
+mpienv
