@@ -83,14 +83,14 @@ inline void __print_cuda_ptr_info(const char *label, void *ptr) {
       WARN("get pointer attr", cu_err);
       return;
     }
-  } else if (attr.memoryType == cudaMemoryTypeDevice) {
-    if (attr.isManaged) {
-        type_name = "Managed";
-    } else {
-        type_name = "Device";
-    }
-  } else if (attr.memoryType == cudaMemoryTypeHost) {
+  } else if (attr.type == cudaMemoryTypeDevice) {
+    type_name = "Device";
+  } else if (attr.type == cudaMemoryTypeManaged) {
+    type_name = "Managed";
+  } else if (attr.type == cudaMemoryTypeHost) {
     type_name = "Host";
+  } else if (attr.type == cudaMemoryTypeUnregistered) {
+    type_name = "Unregistered";
   }
   printf("CUDA pointer %s (%zx): %s\n", label, ptr, type_name);
 }
@@ -111,10 +111,8 @@ inline void __print_cuda_mem_info(const char *label, void *ptr, size_t size) {
       WARN("get pointer attr", cu_err);
       return;
     }
-  } else if (pointer_attr.memoryType == cudaMemoryTypeDevice) {
-    if (pointer_attr.isManaged) {
-        is_managed = true;
-    }
+  } else if (pointer_attr.type == cudaMemoryTypeManaged) {
+    is_managed = true;
   }
 
   if (!is_managed) {
