@@ -185,10 +185,10 @@ int main(int argc, char **argv) {
 
     nvtxRangePushA("allGather");
     nvtxRangePushA("x");
-    MPI_Allgather(x, n, MPI_DOUBLE, allx, n*world_size, MPI_DOUBLE, MPI_COMM_WORLD);
+    MPI_Allgather(x, n, MPI_DOUBLE, allx, n, MPI_DOUBLE, MPI_COMM_WORLD);
     nvtxRangePop();
     nvtxRangePushA("y");
-    MPI_Allgather(y, n, MPI_DOUBLE, ally, n*world_size, MPI_DOUBLE, MPI_COMM_WORLD);
+    MPI_Allgather(y, n, MPI_DOUBLE, ally, n, MPI_DOUBLE, MPI_COMM_WORLD);
     nvtxRangePop();
     nvtxRangePop();
 
