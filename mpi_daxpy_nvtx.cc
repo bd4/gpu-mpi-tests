@@ -1,7 +1,7 @@
 /*
- * =====================================================================================
+ * ===========================================================================
  *
- *       Filename:  mpi_daxpy.c
+ *       Filename:  mpi_daxpy_nvtx.c
  *
  *    Description:  Adds MPI to cublas test, to debug issue on Summit
  *
@@ -13,7 +13,7 @@
  *         Author:  YOUR NAME (), 
  *   Organization:  
  *
- * =====================================================================================
+ * ===========================================================================
  */
 
 #include <mpi.h>
@@ -72,10 +72,10 @@ int main(int argc, char **argv) {
     double a = 2.0;
     double sum = 0.0;
 
-    double *x, *y, *d_x, *d_y;
+    //double *x, *y, *d_x, *d_y;
     double *m_x, *m_y;
 
-    double *allx, *ally;
+    double *m_allx, *m_ally;
 
     char *mb_per_core;
 
@@ -84,6 +84,7 @@ int main(int argc, char **argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+    /*
     x = (double *)malloc(n*sizeof(*x));
     if (x == NULL) {
         printf("host malloc(x) failed\n");
@@ -95,23 +96,7 @@ int main(int argc, char **argv) {
         printf("host malloc(y) failed\n");
         return EXIT_FAILURE;
     }
-
-    allx = (double *)malloc(n*sizeof(*x)*world_size);
-    if (allx == NULL) {
-        printf("host malloc(allx) failed\n");
-        return EXIT_FAILURE;
-    }
-
-    ally = (double *)malloc(n*sizeof(*y)*world_size);
-    if (ally == NULL) {
-        printf("host malloc(ally) failed\n");
-        return EXIT_FAILURE;
-    }
-
-    for (int i=0; i<n; i++) {
-        x[i] =  i+1;
-        y[i] = -i-1;
-    }
+    */
 
     // DEBUG weirdness on summit where GENE can't see MEMORY_PER_CORE,
     // possibly because the system spectrum mpi uses it in some way.
@@ -131,32 +116,44 @@ int main(int argc, char **argv) {
 
     CHECK( "cublas", cublasCreate(&handle) );
 
+    /*
     CHECK( "d_x", cudaMalloc((void**)&d_x, n*sizeof(*d_x)) );
     CHECK( "d_y", cudaMalloc((void**)&d_y, n*sizeof(*d_y)) );
+    */
 
     CHECK( "m_x", cudaMallocManaged((void**)&m_x, n*sizeof(*m_x)) );
     CHECK( "m_y", cudaMallocManaged((void**)&m_y, n*sizeof(*m_y)) );
 
+    CHECK( "m_allx", cudaMallocManaged((void**)&m_allx, n*sizeof(*m_allx)) );
+    CHECK( "m_ally", cudaMallocManaged((void**)&m_ally, n*sizeof(*m_ally)) );
+
+    nvtxRangePushA("initializeArrays");
+    for (int i=0; i<n; i++) {
+        m_x[i] =   (i+1)/(double)n;
+        m_y[i] =  -m_x[i];
+    }
+    nvtxRangePop();
+
+    /*
     nvtxRangePushA("copyInput");
     CHECK("d_x = x",
           cudaMemcpy(d_x, x, n*sizeof(*x), cudaMemcpyHostToDevice) );
     CHECK("d_y = y",
           cudaMemcpy(d_y, y, n*sizeof(*y), cudaMemcpyHostToDevice) );
-
     CHECK("m_x = x",
           cudaMemcpy(m_x, x, n*sizeof(*x), cudaMemcpyHostToDevice) );
     CHECK("m_y = y",
           cudaMemcpy(m_y, y, n*sizeof(*y), cudaMemcpyHostToDevice) );
     nvtxRangePop();
+    */
 
-    MEMINFO("d_x", d_x, sizeof(d_x));
-    MEMINFO("d_y", d_y, sizeof(d_y));
+    //MEMINFO("d_x", d_x, sizeof(d_x));
+    //MEMINFO("d_y", d_y, sizeof(d_y));
+    //MEMINFO("x", x, sizeof(x));
+    //MEMINFO("y", y, sizeof(y));
 
     MEMINFO("m_x", m_x, sizeof(m_x));
     MEMINFO("m_y", m_y, sizeof(m_y));
-
-    MEMINFO("x", x, sizeof(x));
-    MEMINFO("y", y, sizeof(y));
 
     nvtxRangePushA("cublasDaxpy");
     CHECK("daxpy",
@@ -170,9 +167,11 @@ int main(int argc, char **argv) {
           cudaMemcpy(y, m_y, n*sizeof(*y), cudaMemcpyDeviceToHost) );
     */
 
+    /*
     nvtxRangePushA("copyOutput");
     CHECK("y = d_y sync", cudaDeviceSynchronize() );
     nvtxRangePop();
+    */
 
     nvtxRangePushA("localSum");
     sum = 0.0;
@@ -185,10 +184,10 @@ int main(int argc, char **argv) {
 
     nvtxRangePushA("allGather");
     nvtxRangePushA("x");
-    MPI_Allgather(x, n, MPI_DOUBLE, allx, n, MPI_DOUBLE, MPI_COMM_WORLD);
+    MPI_Allgather(m_x, n, MPI_DOUBLE, m_allx, n, MPI_DOUBLE, MPI_COMM_WORLD);
     nvtxRangePop();
     nvtxRangePushA("y");
-    MPI_Allgather(y, n, MPI_DOUBLE, ally, n, MPI_DOUBLE, MPI_COMM_WORLD);
+    MPI_Allgather(m_y, n, MPI_DOUBLE, m_ally, n, MPI_DOUBLE, MPI_COMM_WORLD);
     nvtxRangePop();
     nvtxRangePop();
 
@@ -196,20 +195,23 @@ int main(int argc, char **argv) {
     nvtxRangePushA("allSum");
     for (int i=0; i<n*world_size; i++) {
         //printf("%f\n", y[i]);
-        sum += ally[i];
+        sum += m_ally[i];
     }
     nvtxRangePop();
     printf("%d/%d ALLSUM = %f\n", world_rank, world_size, sum);
 
-
     // cleanup
-    cudaFree(d_x);
-    cudaFree(d_y);
+    nvtxRangePushA("cleanup");
+    //cudaFree(d_x);
+    //cudaFree(d_y);
     cudaFree(m_x);
     cudaFree(m_y);
+    cudaFree(m_allx);
+    cudaFree(m_ally);
     cublasDestroy(handle);
 
     MPI_Finalize();
+    nvtxRangePop();
 
     cudaProfilerStop();
 
