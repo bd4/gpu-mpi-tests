@@ -2,6 +2,7 @@
 all: daxpy mpi_daxpy mpienv daxpy_nvtx mpi_daxpy_nvtx
 
 CCFLAGS = -std=c++11
+CUDA_HOME ?= $(CUDA_DIR)
 
 daxpy: daxpy.cu cuda_error.h
 	nvcc $(CCFLAGS) -lcublas -o daxpy daxpy.cu
