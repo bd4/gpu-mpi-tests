@@ -35,6 +35,8 @@
 
 static cublasHandle_t handle;
 
+static const int MB = 1024*1024;
+
 
 void set_rank_device(int n_ranks, int rank) {
     int n_devices, device, ranks_per_device;
@@ -66,8 +68,10 @@ void set_rank_device(int n_ranks, int rank) {
 
 
 int main(int argc, char **argv) {
-    int n = 32*1024*1024;
+    int n = 4*MB;
     int world_size, world_rank;
+
+    size_t free_mem, total_mem;
 
     double a = 2.0;
     double sum = 0.0;
@@ -129,11 +133,17 @@ int main(int argc, char **argv) {
     CHECK( "d_y", cudaMalloc((void**)&d_y, n*sizeof(*d_y)) );
     */
 
+    nvtxRangePushA("allocateArrays");
     CHECK( "m_x", cudaMallocManaged((void**)&m_x, n*sizeof(*m_x)) );
     CHECK( "m_y", cudaMallocManaged((void**)&m_y, n*sizeof(*m_y)) );
 
     CHECK( "m_allx", cudaMallocManaged((void**)&m_allx, n*sizeof(*m_allx)*world_size) );
     CHECK( "m_ally", cudaMallocManaged((void**)&m_ally, n*sizeof(*m_ally)*world_size) );
+    nvtxRangePop();
+
+    CHECK( "memInfo", cudaMemGetInfo(&free_mem, &total_mem) );
+    printf("GPU memory %0.3f / %0.3f (%0.3f)\n", free_mem/(double)MB,
+           (double)total_mem/MB, (double)(total_mem-free_mem)/MB);
 
     nvtxRangePushA("initializeArrays");
     for (int i=0; i<n; i++) {
