@@ -68,7 +68,9 @@ void set_rank_device(int n_ranks, int rank) {
 
 
 int main(int argc, char **argv) {
-    const int nall = 48*MB;
+    const int n_per_node = 48*MB;
+    int nodes = 1;
+    int nall = n_per_node;
     int n = 0;
     int world_size, world_rank;
 
@@ -99,10 +101,18 @@ int main(int argc, char **argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+    // hack: assume max 6 mpi per node, so we use bigger
+    // arrays on multi-node runs
+    if (world_size > 6) {
+        nodes = (world_size + 5) / 6;
+    }
+
+    nall = nodes * n_per_node;
     n = nall / world_size;
 
     if (world_rank == 0) {
-        printf("%d ranks, %d elements each, total %d\n", world_size, n, nall);
+        printf("%d nodes, %d ranks, %d elements each, total %d\n",
+               nodes, world_size, n, nall);
     }
 
     /*

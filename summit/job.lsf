@@ -1,0 +1,16 @@
+#!/bin/bash
+#BSUB -P fus123
+#BSUB -W 0:20
+#BSUB -nnodes 2
+#BSUB -J cublas-nsys-test
+#BSUB -o cublas-nsys-test.%J
+#BSUB -q debug
+
+./run.sh noum none 6 2
+./run.sh noum nsys 6 2
+./run.sh noum none 6 1 &
+./run.sh noum nsys 6 1
+wait
+./run.sh noum none 3 1 &
+./run.sh noum nsys 3 1
+wait
