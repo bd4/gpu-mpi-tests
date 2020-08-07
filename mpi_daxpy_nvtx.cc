@@ -201,19 +201,20 @@ int main(int argc, char **argv) {
     printf("%d/%d ALLSUM = %f\n", world_rank, world_size, sum);
 
     // cleanup
-    nvtxRangePushA("cleanup");
+    nvtxRangePushA("free");
     //cudaFree(d_x);
     //cudaFree(d_y);
     cudaFree(m_x);
     cudaFree(m_y);
     cudaFree(m_allx);
     cudaFree(m_ally);
-    cublasDestroy(handle);
 
-    MPI_Finalize();
     nvtxRangePop();
 
     cudaProfilerStop();
+
+    cublasDestroy(handle);
+    MPI_Finalize();
 
     return EXIT_SUCCESS;
 }
