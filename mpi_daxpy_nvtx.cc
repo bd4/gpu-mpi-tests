@@ -68,7 +68,8 @@ void set_rank_device(int n_ranks, int rank) {
 
 
 int main(int argc, char **argv) {
-    int n = 4*MB;
+    const int nall = 48*MB;
+    int n = 0;
     int world_size, world_rank;
 
     size_t free_mem, total_mem;
@@ -84,7 +85,8 @@ int main(int argc, char **argv) {
     double g_end_time = 0.0;
 
 #ifndef MANAGED
-    double *h_x, *h_y, *h_allx, *h_ally;
+    double *h_x, *h_y;
+    double *h_allx, *h_ally;
 #endif
 
     double *d_x, *d_y;
@@ -96,6 +98,12 @@ int main(int argc, char **argv) {
 
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    n = nall / world_size;
+
+    if (world_rank == 0) {
+        printf("%d ranks, %d elements each, total %d\n", world_size, n, nall);
+    }
 
     /*
     x = (double *)malloc(n*sizeof(*x));
@@ -159,9 +167,11 @@ int main(int argc, char **argv) {
 #endif
     nvtxRangePop();
 
-    CHECK( "memInfo", cudaMemGetInfo(&free_mem, &total_mem) );
-    printf("GPU memory %0.3f / %0.3f (%0.3f)\n", free_mem/(double)MB,
-           (double)total_mem/MB, (double)(total_mem-free_mem)/MB);
+    if (world_rank == 0) {
+        CHECK( "memInfo", cudaMemGetInfo(&free_mem, &total_mem) );
+        printf("GPU memory %0.3f / %0.3f (%0.3f) MB\n", free_mem/(double)MB,
+               (double)total_mem/MB, (double)(total_mem-free_mem)/MB);
+    }
 
     nvtxRangePushA("initializeArrays");
 #ifdef MANAGED
@@ -175,9 +185,9 @@ int main(int argc, char **argv) {
         h_y[i] =  -h_x[i];
     }
     nvtxRangePushA("copyInput");
-    CHECK("d_x = x",
+    CHECK("d_x = h_x",
           cudaMemcpy(d_x, h_x, n*sizeof(*h_x), cudaMemcpyHostToDevice) );
-    CHECK("d_y = y",
+    CHECK("d_y = h_y",
           cudaMemcpy(d_y, h_y, n*sizeof(*h_y), cudaMemcpyHostToDevice) );
     nvtxRangePop();
 #endif
@@ -190,6 +200,13 @@ int main(int argc, char **argv) {
 
     MEMINFO("d_x", d_x, sizeof(d_x));
     MEMINFO("d_y", d_y, sizeof(d_y));
+
+#ifndef MANAGED
+    MEMINFO("h_x", h_x, sizeof(h_x));
+    MEMINFO("h_y", h_y, sizeof(h_y));
+    MEMINFO("h_allx", h_allx, sizeof(h_allx));
+    MEMINFO("h_ally", h_ally, sizeof(h_ally));
+#endif
 
     k_start_time = MPI_Wtime();
     nvtxRangePushA("cublasDaxpy");
@@ -237,9 +254,9 @@ int main(int argc, char **argv) {
         sum += d_ally[i];
     }
 #else
-    nvtxRangePushA("copyOutput");
+    nvtxRangePushA("copyAlly");
     CHECK("h_ally = d_ally",
-          cudaMemcpy(h_ally, d_ally, n*sizeof(*h_ally),
+          cudaMemcpy(h_ally, d_ally, n*sizeof(*h_ally)*world_size,
                      cudaMemcpyDeviceToHost) );
     nvtxRangePop();
     for (int i=0; i<n*world_size; i++) {
@@ -252,10 +269,10 @@ int main(int argc, char **argv) {
     // cleanup
     nvtxRangePushA("free");
 #ifndef MANAGED
-    cudaFree(h_x);
-    cudaFree(h_y);
-    cudaFree(h_allx);
-    cudaFree(h_ally);
+    cudaFreeHost(h_x);
+    cudaFreeHost(h_y);
+    cudaFreeHost(h_allx);
+    cudaFreeHost(h_ally);
 #endif
     cudaFree(d_x);
     cudaFree(d_y);
@@ -270,9 +287,12 @@ int main(int argc, char **argv) {
     cublasDestroy(handle);
     MPI_Finalize();
 
-    printf("total time: %0.3f\n", end_time-start_time);
-    printf("kernel time: %0.3f\n", k_end_time-k_start_time);
-    printf("gather time: %0.3f\n", g_end_time-g_start_time);
+    printf("%d/%d TIME total : %0.3f\n", world_rank, world_size,
+           end_time-start_time);
+    printf("%d/%d TIME kernel: %0.3f\n", world_rank, world_size,
+           k_end_time-k_start_time);
+    printf("%d/%d TIME gather: %0.3f\n", world_rank, world_size,
+           g_end_time-g_start_time);
 
     return EXIT_SUCCESS;
 }
