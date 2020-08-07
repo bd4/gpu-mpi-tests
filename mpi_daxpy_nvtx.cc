@@ -83,10 +83,12 @@ int main(int argc, char **argv) {
     double g_start_time = 0.0;
     double g_end_time = 0.0;
 
-    //double *x, *y, *d_x, *d_y;
-    double *m_x, *m_y;
+#ifndef MANAGED
+    double *h_x, *h_y, *h_allx, *h_ally;
+#endif
 
-    double *m_allx, *m_ally;
+    double *d_x, *d_y;
+    double *d_allx, *d_ally;
 
     char *mb_per_core;
 
@@ -134,11 +136,27 @@ int main(int argc, char **argv) {
     */
 
     nvtxRangePushA("allocateArrays");
-    CHECK( "m_x", cudaMallocManaged((void**)&m_x, n*sizeof(*m_x)) );
-    CHECK( "m_y", cudaMallocManaged((void**)&m_y, n*sizeof(*m_y)) );
-
-    CHECK( "m_allx", cudaMallocManaged((void**)&m_allx, n*sizeof(*m_allx)*world_size) );
-    CHECK( "m_ally", cudaMallocManaged((void**)&m_ally, n*sizeof(*m_ally)*world_size) );
+#ifdef MANAGED
+    CHECK( "d_x", cudaMallocManaged((void**)&d_x, n*sizeof(*d_x)) );
+    CHECK( "d_y", cudaMallocManaged((void**)&d_y, n*sizeof(*d_y)) );
+    CHECK( "d_allx", cudaMallocManaged((void**)&d_allx,
+           n*sizeof(*d_allx)*world_size) );
+    CHECK( "d_ally", cudaMallocManaged((void**)&d_ally,
+           n*sizeof(*d_ally)*world_size) );
+#else
+    CHECK( "h_x", cudaMallocHost((void**)&h_x, n*sizeof(*h_x)) );
+    CHECK( "h_y", cudaMallocHost((void**)&h_y, n*sizeof(*h_y)) );
+    CHECK( "d_x", cudaMalloc((void**)&d_x, n*sizeof(*d_x)) );
+    CHECK( "d_y", cudaMalloc((void**)&d_y, n*sizeof(*d_y)) );
+    CHECK( "d_allx", cudaMalloc((void**)&d_allx,
+           n*sizeof(*d_allx)*world_size) );
+    CHECK( "d_ally", cudaMalloc((void**)&d_ally,
+           n*sizeof(*d_ally)*world_size) );
+    CHECK( "h_allx", cudaMallocHost((void**)&h_allx,
+           n*sizeof(*h_allx)*world_size) );
+    CHECK( "h_ally", cudaMallocHost((void**)&h_ally,
+           n*sizeof(*h_ally)*world_size) );
+#endif
     nvtxRangePop();
 
     CHECK( "memInfo", cudaMemGetInfo(&free_mem, &total_mem) );
@@ -146,90 +164,103 @@ int main(int argc, char **argv) {
            (double)total_mem/MB, (double)(total_mem-free_mem)/MB);
 
     nvtxRangePushA("initializeArrays");
+#ifdef MANAGED
     for (int i=0; i<n; i++) {
-        m_x[i] =   (i+1)/(double)n;
-        m_y[i] =  -m_x[i];
+        d_x[i] =   (i+1)/(double)n;
+        d_y[i] =  -d_x[i];
     }
-    nvtxRangePop();
-
-    /*
+#else
+    for (int i=0; i<n; i++) {
+        h_x[i] =   (i+1)/(double)n;
+        h_y[i] =  -h_x[i];
+    }
     nvtxRangePushA("copyInput");
     CHECK("d_x = x",
-          cudaMemcpy(d_x, x, n*sizeof(*x), cudaMemcpyHostToDevice) );
+          cudaMemcpy(d_x, h_x, n*sizeof(*h_x), cudaMemcpyHostToDevice) );
     CHECK("d_y = y",
-          cudaMemcpy(d_y, y, n*sizeof(*y), cudaMemcpyHostToDevice) );
-    CHECK("m_x = x",
-          cudaMemcpy(m_x, x, n*sizeof(*x), cudaMemcpyHostToDevice) );
-    CHECK("m_y = y",
-          cudaMemcpy(m_y, y, n*sizeof(*y), cudaMemcpyHostToDevice) );
+          cudaMemcpy(d_y, h_y, n*sizeof(*h_y), cudaMemcpyHostToDevice) );
     nvtxRangePop();
-    */
+#endif
+    nvtxRangePop();
 
     //MEMINFO("d_x", d_x, sizeof(d_x));
     //MEMINFO("d_y", d_y, sizeof(d_y));
     //MEMINFO("x", x, sizeof(x));
     //MEMINFO("y", y, sizeof(y));
 
-    MEMINFO("m_x", m_x, sizeof(m_x));
-    MEMINFO("m_y", m_y, sizeof(m_y));
+    MEMINFO("d_x", d_x, sizeof(d_x));
+    MEMINFO("d_y", d_y, sizeof(d_y));
 
     k_start_time = MPI_Wtime();
     nvtxRangePushA("cublasDaxpy");
     CHECK("daxpy",
-          cublasDaxpy(handle, n, &a, m_x, 1, m_y, 1) );
+          cublasDaxpy(handle, n, &a, d_x, 1, d_y, 1) );
 
     CHECK("daxpy sync", cudaDeviceSynchronize());
     nvtxRangePop();
     k_end_time = MPI_Wtime();
     
-    /*
-    CHECK("y = d_y",
-          cudaMemcpy(y, m_y, n*sizeof(*y), cudaMemcpyDeviceToHost) );
-    */
-
-    /*
-    nvtxRangePushA("copyOutput");
-    CHECK("y = d_y sync", cudaDeviceSynchronize() );
-    nvtxRangePop();
-    */
-
     nvtxRangePushA("localSum");
+#ifdef MANAGED
     sum = 0.0;
     for (int i=0; i<n; i++) {
-        //printf("%f\n", y[i]);
-        sum += m_y[i];
+        sum += d_y[i];
     }
+#else
+    nvtxRangePushA("copyOutput");
+    CHECK("h_y = d_y",
+          cudaMemcpy(h_y, d_y, n*sizeof(*h_y), cudaMemcpyDeviceToHost) );
+    nvtxRangePop();
+    sum = 0.0;
+    for (int i=0; i<n; i++) {
+        sum += h_y[i];
+    }
+#endif
     nvtxRangePop();
     printf("%d/%d SUM = %f\n", world_rank, world_size, sum);
 
     g_start_time = MPI_Wtime();
     nvtxRangePushA("allGather");
     nvtxRangePushA("x");
-    MPI_Allgather(m_x, n, MPI_DOUBLE, m_allx, n, MPI_DOUBLE, MPI_COMM_WORLD);
+    MPI_Allgather(d_x, n, MPI_DOUBLE, d_allx, n, MPI_DOUBLE, MPI_COMM_WORLD);
     nvtxRangePop();
     nvtxRangePushA("y");
-    MPI_Allgather(m_y, n, MPI_DOUBLE, m_ally, n, MPI_DOUBLE, MPI_COMM_WORLD);
+    MPI_Allgather(d_y, n, MPI_DOUBLE, d_ally, n, MPI_DOUBLE, MPI_COMM_WORLD);
     nvtxRangePop();
     nvtxRangePop();
     g_end_time = MPI_Wtime();
 
     sum = 0.0;
     nvtxRangePushA("allSum");
+#ifdef MANAGED
     for (int i=0; i<n*world_size; i++) {
-        //printf("%f\n", y[i]);
-        sum += m_ally[i];
+        sum += d_ally[i];
     }
+#else
+    nvtxRangePushA("copyOutput");
+    CHECK("h_ally = d_ally",
+          cudaMemcpy(h_ally, d_ally, n*sizeof(*h_ally),
+                     cudaMemcpyDeviceToHost) );
+    nvtxRangePop();
+    for (int i=0; i<n*world_size; i++) {
+        sum += h_ally[i];
+    }
+#endif
     nvtxRangePop();
     printf("%d/%d ALLSUM = %f\n", world_rank, world_size, sum);
 
     // cleanup
     nvtxRangePushA("free");
-    //cudaFree(d_x);
-    //cudaFree(d_y);
-    cudaFree(m_x);
-    cudaFree(m_y);
-    cudaFree(m_allx);
-    cudaFree(m_ally);
+#ifndef MANAGED
+    cudaFree(h_x);
+    cudaFree(h_y);
+    cudaFree(h_allx);
+    cudaFree(h_ally);
+#endif
+    cudaFree(d_x);
+    cudaFree(d_y);
+    cudaFree(d_allx);
+    cudaFree(d_ally);
 
     nvtxRangePop();
 

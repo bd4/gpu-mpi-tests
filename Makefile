@@ -1,5 +1,5 @@
 .PHONY: all
-all: daxpy mpi_daxpy mpienv daxpy_nvtx mpi_daxpy_nvtx
+all: daxpy mpi_daxpy mpienv daxpy_nvtx mpi_daxpy_nvtx_managed mpi_daxpy_nvtx_unmanaged
 
 CCFLAGS = -std=c++11
 CUDA_HOME ?= $(CUDA_DIR)
@@ -13,15 +13,18 @@ daxpy_nvtx: daxpy_nvtx.cu cuda_error.h
 mpi_daxpy: mpi_daxpy.cc cuda_error.h
 	mpic++ $(CCFLAGS) -lcudart -lcublas -I$(CUDA_HOME)/include -L$(CUDA_HOME)/lib64 -o mpi_daxpy mpi_daxpy.cc
 
-mpi_daxpy_nvtx: mpi_daxpy_nvtx.cc cuda_error.h
-	mpic++ $(CCFLAGS) -lcudart -lcublas -lnvToolsExt -I$(CUDA_HOME)/include -L$(CUDA_HOME)/lib64 -o mpi_daxpy_nvtx mpi_daxpy_nvtx.cc
+mpi_daxpy_nvtx_managed: mpi_daxpy_nvtx.cc cuda_error.h
+	mpic++ $(CCFLAGS) -lcudart -lcublas -lnvToolsExt -I$(CUDA_HOME)/include -L$(CUDA_HOME)/lib64 -o mpi_daxpy_nvtx_managed mpi_daxpy_nvtx.cc -DMANAGED
+
+mpi_daxpy_nvtx_unmanaged: mpi_daxpy_nvtx.cc cuda_error.h
+	mpic++ $(CCFLAGS) -lcudart -lcublas -lnvToolsExt -I$(CUDA_HOME)/include -L$(CUDA_HOME)/lib64 -o mpi_daxpy_nvtx_unmanaged mpi_daxpy_nvtx.cc
 
 mpienv: mpienv.f90
 	mpif90 -o mpienv mpienv.f90
 
 .PHONY: clean
 clean:
-	rm -rf daxpy mpi_daxpy daxpy_nvtx mpi_daxpy_nvtx
+	rm -rf daxpy mpi_daxpy daxpy_nvtx mpi_daxpy_nvtx_managed mpi_daxpy_nvtx_unmanaged
 
 .PHONY: force
 force: clean all
