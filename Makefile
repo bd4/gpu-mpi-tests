@@ -21,7 +21,7 @@ mpienv: mpienv.f90
 
 .PHONY: clean
 clean:
-	rm -rf daxpy mpi_daxpy
+	rm -rf daxpy mpi_daxpy daxpy_nvtx mpi_daxpy_nvtx
 
 .PHONY: force
 force: clean all
