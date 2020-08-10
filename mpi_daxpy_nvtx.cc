@@ -32,6 +32,8 @@
 // column major
 #define IDX2C(i,j,ld) (((j)*(ld))+(i))
 
+#define BARRIER
+
 
 static cublasHandle_t handle;
 
@@ -85,6 +87,8 @@ int main(int argc, char **argv) {
     double k_end_time = 0.0;
     double g_start_time = 0.0;
     double g_end_time = 0.0;
+    double b_start_time = 0.0;
+    double b_end_time = 0.0;
 
 #ifndef MANAGED
     double *h_x, *h_y;
@@ -246,8 +250,16 @@ int main(int argc, char **argv) {
     nvtxRangePop();
     printf("%d/%d SUM = %f\n", world_rank, world_size, sum);
 
+#ifdef BARRIER
+    b_start_time = MPI_Wtime();
+    nvtxRangePushA("mpiBarrier");
+    MPI_Barrier(MPI_COMM_WORLD);
+    nvtxRangePop();
+    b_end_time = MPI_Wtime();
+#endif
+
     g_start_time = MPI_Wtime();
-    nvtxRangePushA("allGather");
+    nvtxRangePushA("mpiAllGather");
     nvtxRangePushA("x");
     MPI_Allgather(d_x, n, MPI_DOUBLE, d_allx, n, MPI_DOUBLE, MPI_COMM_WORLD);
     nvtxRangePop();
@@ -297,11 +309,13 @@ int main(int argc, char **argv) {
     cublasDestroy(handle);
     MPI_Finalize();
 
-    printf("%d/%d TIME total : %0.3f\n", world_rank, world_size,
+    printf("%d/%d TIME total  : %0.3f\n", world_rank, world_size,
            end_time-start_time);
-    printf("%d/%d TIME kernel: %0.3f\n", world_rank, world_size,
+    printf("%d/%d TIME kernel : %0.3f\n", world_rank, world_size,
            k_end_time-k_start_time);
-    printf("%d/%d TIME gather: %0.3f\n", world_rank, world_size,
+    printf("%d/%d TIME barrier: %0.3f\n", world_rank, world_size,
+           b_end_time-b_start_time);
+    printf("%d/%d TIME gather : %0.3f\n", world_rank, world_size,
            g_end_time-g_start_time);
 
     return EXIT_SUCCESS;
