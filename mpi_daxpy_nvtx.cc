@@ -69,6 +69,19 @@ void set_rank_device(int n_ranks, int rank) {
 }
 
 
+int get_node_count(int n_ranks) {
+    int shm_size;
+    MPI_Comm shm_comm;
+
+    MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
+                        MPI_INFO_NULL, &shm_comm);
+    MPI_Comm_size(shm_comm, &shm_size);
+
+    MPI_Comm_free(&shm_comm);
+    return n_ranks / shm_size;
+}
+
+
 int main(int argc, char **argv) {
     const int n_per_node = 48*MB;
     int nodes = 1;
@@ -105,11 +118,15 @@ int main(int argc, char **argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+    nodes = get_node_count(world_size);
+
     // hack: assume max 6 mpi per node, so we use bigger
     // arrays on multi-node runs
+    /*
     if (world_size > 6) {
         nodes = (world_size + 5) / 6;
     }
+    */
 
     nall = nodes * n_per_node;
     n = nall / world_size;

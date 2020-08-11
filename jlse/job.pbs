@@ -1,0 +1,21 @@
+#!/bin/bash
+#COBALT -t 00:20:00
+#COBALT -n 2
+#COBALT --jobname cublas-nsys-test
+#COBALT -O cublas-nsys-test
+#COBALT -q gpu_v100_smx2
+
+cd $HOME/hpc/mpi-cuda/jlse
+pwd
+source ./setup.sh
+which mpirun
+which nsys
+
+./run.sh noum none 2 4
+./run.sh noum nsys 2 4
+./run.sh noum none 1 4 &
+./run.sh noum nsys 1 4
+wait
+./run.sh noum none 1 2 &
+./run.sh noum nsys 1 2
+wait
