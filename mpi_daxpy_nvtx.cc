@@ -32,7 +32,7 @@
 // column major
 #define IDX2C(i,j,ld) (((j)*(ld))+(i))
 
-#define BARRIER
+//#define BARRIER
 
 
 static cublasHandle_t handle;
