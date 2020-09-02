@@ -267,6 +267,10 @@ int main(int argc, char **argv) {
     nvtxRangePop();
     printf("%d/%d SUM = %f\n", world_rank, world_size, sum);
 
+    nvtxRangePushA("copyPrepAllxInplace");
+    cudaMemcpy(d_allx+(world_rank*n), d_x, n*sizeof(*d_x), cudaMemcpyDeviceToDevice);
+    nvtxRangePop();
+
 #ifdef BARRIER
     b_start_time = MPI_Wtime();
     nvtxRangePushA("mpiBarrier");
@@ -278,7 +282,7 @@ int main(int argc, char **argv) {
     g_start_time = MPI_Wtime();
     nvtxRangePushA("mpiAllGather");
     nvtxRangePushA("x");
-    MPI_Allgather(d_x, n, MPI_DOUBLE, d_allx, n, MPI_DOUBLE, MPI_COMM_WORLD);
+    MPI_Allgather(MPI_IN_PLACE, n, MPI_DOUBLE, d_allx, n, MPI_DOUBLE, MPI_COMM_WORLD);
     nvtxRangePop();
     nvtxRangePushA("y");
     MPI_Allgather(d_y, n, MPI_DOUBLE, d_ally, n, MPI_DOUBLE, MPI_COMM_WORLD);
