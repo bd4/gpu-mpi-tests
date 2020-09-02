@@ -1,5 +1,5 @@
 .PHONY: all
-all: daxpy mpi_daxpy mpienv daxpy_nvtx mpi_daxpy_nvtx_managed mpi_daxpy_nvtx_unmanaged
+all: daxpy mpi_daxpy mpienv daxpy_nvtx mpi_daxpy_nvtx_managed mpi_daxpy_nvtx_unmanaged mpigatherinplace
 
 CCFLAGS = -std=c++11
 CUDA_HOME ?= $(CUDA_DIR)
@@ -21,6 +21,9 @@ mpi_daxpy_nvtx_unmanaged: mpi_daxpy_nvtx.cc cuda_error.h
 
 mpienv: mpienv.f90
 	mpif90 -o mpienv mpienv.f90
+
+mpigatherinplace: mpigatherinplace.f90
+	mpifort -o mpigatherinplace mpigatherinplace.f90
 
 .PHONY: clean
 clean:
