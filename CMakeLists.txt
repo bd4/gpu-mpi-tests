@@ -17,9 +17,11 @@ find_package(MPI REQUIRED)
 add_executable(mpi_daxpy_gt)
 target_sources(mpi_daxpy_gt PRIVATE mpi_daxpy_gt.cc)
 target_link_libraries(mpi_daxpy_gt gtensor::gtensor)
+target_link_libraries(mpi_daxpy_gt gtensor::blas)
 target_link_libraries(mpi_daxpy_gt MPI::MPI_CXX)
 
 if ("${GTENSOR_DEVICE}" STREQUAL "cuda") 
+  enable_language(CUDA)
   set_source_files_properties(mpi_daxpy_gt.cc
                               TARGET_DIRECTORY mpi_daxpy_gt
                               PROPERTIES LANGUAGE CUDA)
