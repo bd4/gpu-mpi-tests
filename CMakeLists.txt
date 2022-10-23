@@ -10,10 +10,6 @@ CPMFindPackage(NAME gtensor
                GIT_TAG "pr/sycl-include-refactor"
                OPTIONS "GTENSOR_ENABLE_BLAS ON")
 
-CPMFindPackage(NAME fmt
-               GITHUB_REPOSITORY fmtlib/fmt
-               GIT_TAG "9.1.0")
-
 find_package(MPI REQUIRED)
 
 add_executable(mpi_daxpy_gt)
@@ -26,7 +22,6 @@ add_executable(mpi_stencil_gt)
 target_sources(mpi_stencil_gt PRIVATE mpi_stencil_gt.cc)
 target_link_libraries(mpi_stencil_gt gtensor::gtensor)
 target_link_libraries(mpi_stencil_gt MPI::MPI_CXX)
-target_link_libraries(mpi_stencil_gt fmt::fmt)
 
 if ("${GTENSOR_DEVICE}" STREQUAL "cuda") 
   enable_language(CUDA)

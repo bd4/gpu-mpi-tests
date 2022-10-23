@@ -5,16 +5,12 @@
  */
 
 #include <cmath>
-#include <iostream>
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "gtensor/gtensor.h"
 #include "gtensor/reductions.h"
-
-#include "fmt/core.h"
-#include "fmt/ostream.h"
 
 using namespace gt::placeholders;
 
@@ -68,8 +64,8 @@ void set_rank_device(int n_ranks, int rank) {
 
   if (n_ranks > n_devices) {
     if (n_ranks % n_devices != 0) {
-      fmt::print(
-          "ERROR: Number of ranks ({}) not a multiple of number of GPUs ({})\n",
+      printf(
+          "ERROR: Number of ranks (%d) not a multiple of number of GPUs (%d)\n",
           n_ranks, n_devices);
       exit(EXIT_FAILURE);
     }
@@ -95,7 +91,7 @@ void boundary_exchange(MPI_Comm comm, int world_size, int rank,
   int rank_r = rank + 1;
 
   if (rank_l >= 0) {
-    fmt::print("{} left\n", rank);
+    printf("%d left\n", rank);
     // send/recv left boundary
     MPI_Irecv(d_y_data, n_bnd, MPI_DOUBLE, rank_l, 123, comm, &req_l[0]);
     MPI_Isend(d_y_data + n_bnd, n_bnd, MPI_DOUBLE, rank_l, 456, comm,
@@ -103,7 +99,7 @@ void boundary_exchange(MPI_Comm comm, int world_size, int rank,
   }
 
   if (rank_r < world_size) {
-    fmt::print("{} right\n", rank);
+    printf("%d right\n", rank);
     // send/recv right boundary
     MPI_Irecv(d_y_data_end - n_bnd, n_bnd, MPI_DOUBLE, rank_r, 456, comm,
               &req_r[0]);
@@ -113,17 +109,17 @@ void boundary_exchange(MPI_Comm comm, int world_size, int rank,
 
   int mpi_rval;
   if (rank_l >= 0) {
-    fmt::print("{} wait left\n", rank);
+    printf("%d wait left\n", rank);
     mpi_rval = MPI_Waitall(2, req_l, MPI_STATUSES_IGNORE);
     if (mpi_rval != MPI_SUCCESS) {
-      fmt::print("send_l error: {}\n", mpi_rval);
+      printf("send_l error: %d\n", mpi_rval);
     }
   }
   if (rank_r < world_size) {
-    fmt::print("{} wait right\n", rank);
+    printf("%d wait right\n", rank);
     mpi_rval = MPI_Waitall(2, req_r, MPI_STATUSES_IGNORE);
     if (mpi_rval != MPI_SUCCESS) {
-      fmt::print("send_r error: {}\n", mpi_rval);
+      printf("send_r error: %d\n", mpi_rval);
     }
   }
 }
@@ -161,7 +157,7 @@ int main(int argc, char **argv) {
   auto fn_x_cubed = [](double x) { return x * x * x; };
   auto fn_x_cubed_deriv = [](double x) { return 3 * x * x; };
 
-  fmt::print("{} Init\n", world_rank);
+  printf("%d Init\n", world_rank);
   double x_start = world_rank * lx_local;
   for (int i = 0; i < n_local; i++) {
     double xtmp = x_start + i * dx;
@@ -186,36 +182,36 @@ int main(int argc, char **argv) {
   gt::copy(h_y, d_y);
   gt::synchronize();
 
-  fmt::print("{} Ex\n", world_rank);
+  printf("%d Ex\n", world_rank);
 
   boundary_exchange(MPI_COMM_WORLD, world_size, world_rank, d_y, n_bnd);
   gt::synchronize();
 
-  fmt::print("{} Sten\n", world_rank);
+  printf("%d Sten\n", world_rank);
   d_dydx_numeric = stencil1d_5(d_y, stencil5) * scale;
   gt::synchronize();
 
-  fmt::print("{} Copy\n", world_rank);
+  printf("%d Copy\n", world_rank);
   gt::copy(d_dydx_numeric, h_dydx_numeric);
   gt::synchronize();
 
   /*
   for (int i = 0; i < 5; i++) {
-    fmt::print("{0} l {1}\n{0} l {2}\n", world_rank, h_dydx_actual(i),
+    printf("{0} l {1}\n{0} l {2}\n", world_rank, h_dydx_actual(i),
                h_dydx_numeric(i));
   }
   for (int i = 0; i < 5; i++) {
     int idx = n_local - 1 - i;
-    fmt::print("{0} r {1}\n{0} r {2}\n", world_rank, h_dydx_actual(idx),
+    printf("{0} r {1}\n{0} r {2}\n", world_rank, h_dydx_actual(idx),
                h_dydx_numeric(idx));
   }
   */
 
-  fmt::print("{} Err calc\n", world_rank);
+  printf("%d Err calc\n", world_rank);
   double err_norm = std::sqrt(gt::sum_squares(h_dydx_numeric - h_dydx_actual));
 
-  fmt::print("{}/{} [{}:{:#08x}] err_norm = {:.10f}\n", world_rank, world_size,
-             device_id, vendor_id, err_norm);
+  printf("%d/%d [%d:0x%08x] err_norm = %.8f\n", world_rank, world_size,
+         device_id, vendor_id, err_norm);
 
   MPI_Finalize();
 
