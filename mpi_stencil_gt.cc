@@ -125,9 +125,14 @@ void boundary_exchange(MPI_Comm comm, int world_size, int rank,
 }
 
 int main(int argc, char **argv) {
-  constexpr int n_global = 8 * 1024 * 1024;
-  constexpr int n_sten = 5;
-  constexpr int n_bnd = (n_sten - 1) / 2;
+  int n_global = 32 * 1024 * 1024;
+
+  if (argc > 1) {
+    n_global = std::atoi(argv[1]) * 1024 * 1024;
+  }
+
+  int n_sten = 5;
+  int n_bnd = (n_sten - 1) / 2;
   int world_size, world_rank, device_id;
   uint32_t vendor_id;
 
@@ -142,6 +147,12 @@ int main(int argc, char **argv) {
   set_rank_device(world_size, world_rank);
   device_id = gt::backend::clib::device_get();
   vendor_id = gt::backend::clib::device_get_vendor_id(device_id);
+
+  if (world_rank == 0) {
+    printf("n procs  = %d\n", world_size);
+    printf("n_global = %d\n", n_global);
+    printf("n_local  = %d\n", n_local);
+  }
 
   auto h_y = gt::empty<double>({n_local_with_ghost});
   auto d_y = gt::empty_device<double>({n_local_with_ghost});
