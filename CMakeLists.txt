@@ -23,6 +23,11 @@ target_sources(mpi_stencil_gt PRIVATE mpi_stencil_gt.cc)
 target_link_libraries(mpi_stencil_gt gtensor::gtensor)
 target_link_libraries(mpi_stencil_gt MPI::MPI_CXX)
 
+add_executable(mpi_stencil2d_gt)
+target_sources(mpi_stencil2d_gt PRIVATE mpi_stencil2d_gt.cc)
+target_link_libraries(mpi_stencil2d_gt gtensor::gtensor)
+target_link_libraries(mpi_stencil2d_gt MPI::MPI_CXX)
+
 if ("${GTENSOR_DEVICE}" STREQUAL "cuda") 
   enable_language(CUDA)
   set_source_files_properties(mpi_daxpy_gt.cc
@@ -31,11 +36,17 @@ if ("${GTENSOR_DEVICE}" STREQUAL "cuda")
   set_source_files_properties(mpi_stencil_gt.cc
                               TARGET_DIRECTORY mpi_stencil_gt
                               PROPERTIES LANGUAGE CUDA)
+  set_source_files_properties(mpi_stencil2d_gt.cc
+                              TARGET_DIRECTORY mpi_stencil_gt
+                              PROPERTIES LANGUAGE CUDA)
 else()
   set_source_files_properties(mpi_daxpy_gt.cc
                               TARGET_DIRECTORY mpi_daxpy_gt
                               PROPERTIES LANGUAGE CXX)
   set_source_files_properties(mpi_stencil_gt.cc
+                              TARGET_DIRECTORY mpi_stencil_gt
+                              PROPERTIES LANGUAGE CXX)
+  set_source_files_properties(mpi_stencil2d_gt.cc
                               TARGET_DIRECTORY mpi_stencil_gt
                               PROPERTIES LANGUAGE CXX)
 endif()
