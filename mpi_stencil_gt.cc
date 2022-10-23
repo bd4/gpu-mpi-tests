@@ -191,20 +191,20 @@ int main(int argc, char **argv) {
   }
 
   gt::copy(h_y, d_y);
-  gt::synchronize();
+  // gt::synchronize();
 
   printf("%d Ex\n", world_rank);
 
   boundary_exchange(MPI_COMM_WORLD, world_size, world_rank, d_y, n_bnd);
-  gt::synchronize();
+  // gt::synchronize();
 
   printf("%d Sten\n", world_rank);
   d_dydx_numeric = stencil1d_5(d_y, stencil5) * scale;
-  gt::synchronize();
+  // gt::synchronize();
 
   printf("%d Copy\n", world_rank);
   gt::copy(d_dydx_numeric, h_dydx_numeric);
-  gt::synchronize();
+  // gt::synchronize();
 
   /*
   for (int i = 0; i < 5; i++) {
