@@ -1,7 +1,19 @@
 /*
- * Test GPU aware MPI on different platforms using a simple
- * distributed 1d stencil as an example. Gtensor is used so
- * a single source can be used for all platforms.
+ * Test GPU aware MPI on different platforms using a distributed
+ * 1d stencil on a 2d array. The exchange in second (non-contiguous)
+ * direction forces use of staging buffers, which replicates what
+ * is needed for all but the innermost dimension exchanges in the
+ * GENE fusion code.
+ *
+ * Takes optional command line arg for size of each dimension of the domain
+ * n_global, in 1024 increments. Default is 8 * 1024 (so 256K plus ghost points
+ * in size for doulbles per array), which should fit on any system but may not
+ * be enough to tax larger HPC GPUs and MPI impelmentations.
+ *
+ * There will be four exchange buffers of size 2 * n_global, i.e. 128K each
+ * by default.
+ *
+ * Gtensor is used so a single source can be used for all platforms.
  */
 
 #include <cmath>
@@ -164,6 +176,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
 int main(int argc, char** argv)
 {
+  // Note: domain will be n_global x n_global plus ghost points in one dimension
   int n_global = 8 * 1024;
 
   if (argc > 1) {
@@ -221,7 +234,7 @@ int main(int argc, char** argv)
   }
 
   // fill boundary points on ends
-  if (world_rank == 1) {
+  if (world_rank == 0) {
     for (int i = 0; i < n_bnd; i++) {
       double xtmp = (i - n_bnd) * dx;
       for (int j = 0; j < n_global; j++) {
