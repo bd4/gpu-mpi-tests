@@ -138,6 +138,12 @@ int main(int argc, char **argv) {
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+  if (n_global % world_size != 0) {
+    printf("%d nmpi (%d) must be divisor of domain size (%d), exiting\n",
+           world_rank, world_size, n_global);
+    exit(1);
+  }
+
   const int n_local = n_global / world_size;
   const int n_local_with_ghost = n_local + 2 * n_bnd;
 
@@ -176,7 +182,7 @@ int main(int argc, char **argv) {
   }
 
   // fill boundary points on ends
-  if (world_rank == 1) {
+  if (world_rank == 0) {
     for (int i = 0; i < n_bnd; i++) {
       double xtmp = (i - n_bnd) * dx;
       h_y(i) = fn_x_cubed(xtmp);
@@ -190,30 +196,26 @@ int main(int argc, char **argv) {
   }
 
   gt::copy(h_y, d_y);
-  // gt::synchronize();
 
   clock_gettime(CLOCK_MONOTONIC, &start);
   boundary_exchange(MPI_COMM_WORLD, world_size, world_rank, d_y, n_bnd);
-  // gt::synchronize();
   clock_gettime(CLOCK_MONOTONIC, &end);
   seconds = ((end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) * 1.0e-9);
   printf("%d/%d exchange time %0.4f\n", world_rank, world_size, seconds);
 
   d_dydx_numeric = stencil1d_5(d_y, stencil5) * scale;
-  // gt::synchronize();
 
   gt::copy(d_dydx_numeric, h_dydx_numeric);
-  // gt::synchronize();
 
   /*
   for (int i = 0; i < 5; i++) {
-    printf("{0} l {1}\n{0} l {2}\n", world_rank, h_dydx_actual(i),
-               h_dydx_numeric(i));
+    printf("%d la %f\n%d ln %f\n", world_rank, h_dydx_actual(i),
+           world_rank, h_dydx_numeric(i));
   }
   for (int i = 0; i < 5; i++) {
     int idx = n_local - 1 - i;
-    printf("{0} r {1}\n{0} r {2}\n", world_rank, h_dydx_actual(idx),
-               h_dydx_numeric(idx));
+    printf("%d ra %f\n%d rn %f\n", world_rank, h_dydx_actual(idx),
+           world_rank, h_dydx_numeric(idx));
   }
   */
 

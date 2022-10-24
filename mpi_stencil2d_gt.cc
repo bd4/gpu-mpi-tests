@@ -193,6 +193,12 @@ int main(int argc, char** argv)
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+  if (n_global % world_size != 0) {
+    printf("%d nmpi (%d) must be divisor of domain size (%d), exiting\n",
+           world_rank, world_size, n_global);
+    exit(1);
+  }
+
   const int n_local = n_global / world_size;
   const int n_local_with_ghost = n_local + 2 * n_bnd;
 
