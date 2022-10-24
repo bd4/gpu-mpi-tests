@@ -201,7 +201,7 @@ int main(int argc, char **argv) {
   boundary_exchange(MPI_COMM_WORLD, world_size, world_rank, d_y, n_bnd);
   clock_gettime(CLOCK_MONOTONIC, &end);
   seconds = ((end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) * 1.0e-9);
-  printf("%d/%d exchange time %0.4f\n", world_rank, world_size, seconds);
+  printf("%d/%d exchange time %0.8f\n", world_rank, world_size, seconds);
 
   d_dydx_numeric = stencil1d_5(d_y, stencil5) * scale;
 
