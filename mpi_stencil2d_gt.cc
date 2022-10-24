@@ -267,6 +267,8 @@ int main(int argc, char** argv)
     printf("n procs    = %d\n", world_size);
     printf("n_global   = %d\n", n_global);
     printf("n_local    = %d\n", n_local);
+    printf("n_iter     = %d\n", n_iter);
+    printf("n_warmup   = %d\n", n_warmup);
     printf("stage_host = %d\n", stage_host);
   }
 
