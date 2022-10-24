@@ -259,9 +259,10 @@ int main(int argc, char** argv)
   vendor_id = gt::backend::clib::device_get_vendor_id(device_id);
 
   if (world_rank == 0) {
-    printf("n procs  = %d\n", world_size);
-    printf("n_global = %d\n", n_global);
-    printf("n_local  = %d\n", n_local);
+    printf("n procs    = %d\n", world_size);
+    printf("n_global   = %d\n", n_global);
+    printf("n_local    = %d\n", n_local);
+    printf("stage_host = %d\n", stage_host);
   }
 
   auto h_z = gt::empty<double>({n_global, n_local_with_ghost});
