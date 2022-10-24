@@ -73,7 +73,7 @@ int main(int argc, char **argv) {
     device_id = gt::backend::clib::device_get();
     vendor_id = gt::backend::clib::device_get_vendor_id(device_id);
 
-    gt::blas::handle_t* h = gt::blas::create();
+    gt::blas::handle_t h;
 
     gt::copy(x, d_x);
     gt::copy(y, d_y);
