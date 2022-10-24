@@ -105,7 +105,8 @@ void set_rank_device(int n_ranks, int rank)
 // exchange in non-contiguous second dimension, staging into contiguous buffers
 // on device
 void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
-                         gt::gtensor_device<double, 2>& d_z, int n_bnd)
+                         gt::gtensor_device<double, 2>& d_z, int n_bnd,
+                         bool stage_host=false)
 {
   auto buf_shape = gt::shape(d_z.shape(0), n_bnd);
   gt::gtensor_device<double, 2> sbuf_l(buf_shape);
@@ -113,7 +114,16 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
   gt::gtensor_device<double, 2> rbuf_r(buf_shape);
   gt::gtensor_device<double, 2> rbuf_l(buf_shape);
 
-  int buf_size = buf_shape[0] * buf_shape[1];
+  gt::shape_type<2> host_buf_shape;
+  if (stage_host) {
+    host_buf_shape = buf_shape;
+  } else {
+    host_buf_shape = { 0, 0 };
+  }
+  gt::gtensor<double, 2> h_sbuf_l(host_buf_shape);
+  gt::gtensor<double, 2> h_sbuf_r(host_buf_shape);
+  gt::gtensor<double, 2> h_rbuf_r(host_buf_shape);
+  gt::gtensor<double, 2> h_rbuf_l(host_buf_shape);
 
   MPI_Request req_l[2];
   MPI_Request req_r[2];
@@ -124,20 +134,38 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
   // start async copy of ghost points into send buffers
   if (rank_l >= 0) {
     sbuf_l = d_z.view(_all, _s(n_bnd, 2 * n_bnd));
+    if (stage_host) {
+      gt::copy(sbuf_l, h_sbuf_l);
+    }
   }
   if (rank_r <= world_size) {
     sbuf_r = d_z.view(_all, _s(-2 * n_bnd, -n_bnd));
+    if (stage_host) {
+      gt::copy(sbuf_r, h_sbuf_r);
+    }
   }
 
   // initiate async recv
   if (rank_l >= 0) {
-    MPI_Irecv(gt::raw_pointer_cast(rbuf_l.data()), buf_size, MPI_DOUBLE, rank_l,
-              123, comm, &req_l[0]);
+    double *rbuf_l_data = nullptr;
+    if (stage_host) {
+      rbuf_l_data = h_rbuf_l.data();
+    } else {
+      rbuf_l_data = rbuf_l.data().get();
+    }
+    MPI_Irecv(rbuf_l_data, rbuf_l.size(), MPI_DOUBLE, rank_l, 123, comm,
+              &req_l[0]);
   }
 
   if (rank_r < world_size) {
-    MPI_Irecv(gt::raw_pointer_cast(rbuf_r.data()), buf_size, MPI_DOUBLE, rank_r,
-              456, comm, &req_r[0]);
+    double *rbuf_r_data = nullptr;
+    if (stage_host) {
+      rbuf_r_data = h_rbuf_r.data();
+    } else {
+      rbuf_r_data = rbuf_r.data().get();
+    }
+    MPI_Irecv(rbuf_r_data, rbuf_r.size(), MPI_DOUBLE, rank_r, 456, comm,
+              &req_r[0]);
   }
 
   // wait for send buffer fill
@@ -145,13 +173,25 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
   // initiate async sends
   if (rank_l >= 0) {
-    MPI_Isend(gt::raw_pointer_cast(sbuf_l.data()), buf_size, MPI_DOUBLE, rank_l,
-              456, comm, &req_l[1]);
+    double *sbuf_l_data = nullptr;
+    if (stage_host) {
+      sbuf_l_data = h_sbuf_l.data();
+    } else {
+      sbuf_l_data = sbuf_l.data().get();
+    }
+    MPI_Isend(sbuf_l_data, sbuf_l.size(), MPI_DOUBLE, rank_l, 456, comm,
+              &req_l[1]);
   }
 
   if (rank_r < world_size) {
-    MPI_Isend(gt::raw_pointer_cast(sbuf_r.data()), buf_size, MPI_DOUBLE, rank_r,
-              123, comm, &req_r[1]);
+    double *sbuf_r_data = nullptr;
+    if (stage_host) {
+      sbuf_r_data = h_sbuf_r.data();
+    } else {
+      sbuf_r_data = sbuf_r.data().get();
+    }
+    MPI_Isend(sbuf_r_data, sbuf_r.size(), MPI_DOUBLE, rank_r, 123, comm,
+              &req_r[1]);
   }
 
   // wait for send/recv to complete, then copy data back into main data array
@@ -161,12 +201,18 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     if (mpi_rval != MPI_SUCCESS) {
       printf("send_l error: %d\n", mpi_rval);
     }
+    if (stage_host) {
+      gt::copy(h_rbuf_l, rbuf_l);
+    }
     d_z.view(_all, _s(0, n_bnd)) = rbuf_l;
   }
   if (rank_r < world_size) {
     mpi_rval = MPI_Waitall(2, req_r, MPI_STATUSES_IGNORE);
     if (mpi_rval != MPI_SUCCESS) {
       printf("send_r error: %d\n", mpi_rval);
+    }
+    if (stage_host) {
+      gt::copy(h_rbuf_r, rbuf_r);
     }
     d_z.view(_all, _s(-n_bnd, _)) = rbuf_r;
   }
@@ -178,9 +224,15 @@ int main(int argc, char** argv)
 {
   // Note: domain will be n_global x n_global plus ghost points in one dimension
   int n_global = 8 * 1024;
+  bool stage_host = false;
 
   if (argc > 1) {
     n_global = std::atoi(argv[1]) * 1024;
+  }
+  if (argc > 2) {
+    if (argv[2][0] == '1') {
+      stage_host = true;
+    }
   }
 
   int n_sten = 5;
@@ -263,7 +315,7 @@ int main(int argc, char** argv)
   // gt::synchronize();
 
   clock_gettime(CLOCK_MONOTONIC, &start);
-  boundary_exchange_y(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd);
+  boundary_exchange_y(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd, stage_host);
   // gt::synchronize();
   clock_gettime(CLOCK_MONOTONIC, &end);
   seconds =
