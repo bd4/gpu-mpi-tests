@@ -225,6 +225,8 @@ int main(int argc, char** argv)
   // Note: domain will be n_global x n_global plus ghost points in one dimension
   int n_global = 8 * 1024;
   bool stage_host = false;
+  int n_iter = 100;
+  int n_warmup = 5;
 
   if (argc > 1) {
     n_global = std::atoi(argv[1]) * 1024;
@@ -233,6 +235,9 @@ int main(int argc, char** argv)
     if (argv[2][0] == '1') {
       stage_host = true;
     }
+  }
+  if (argc > 3) {
+    n_iter = std::atoi(argv[3]);
   }
 
   int n_sten = 5;
@@ -280,7 +285,8 @@ int main(int argc, char** argv)
   auto fn_dzdy = [](double x, double y) { return 2 * x; };
 
   struct timespec start, end;
-  double seconds = 0.0;
+  double iter_time = 0.0;
+  double total_time = 0.0;
 
   double x_start = world_rank * lx_local;
   for (int i = 0; i < n_local; i++) {
@@ -315,16 +321,22 @@ int main(int argc, char** argv)
   gt::copy(h_z, d_z);
   // gt::synchronize();
 
-  clock_gettime(CLOCK_MONOTONIC, &start);
-  boundary_exchange_y(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd, stage_host);
-  // gt::synchronize();
-  clock_gettime(CLOCK_MONOTONIC, &end);
-  seconds =
-    ((end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) * 1.0e-9);
-  printf("%d/%d exchange time %0.4f\n", world_rank, world_size, seconds);
+  for (int i = 0; i < n_warmup + n_iter; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    boundary_exchange_y(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd, stage_host);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    iter_time =
+      ((end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) * 1.0e-9);
 
-  d_dzdy_numeric = stencil2d_1d_5(d_z, stencil5) * scale;
-  // gt::synchronize();
+    if (i >= n_warmup) {
+      total_time += iter_time;
+    }
+
+    // do some calculation, to try to more closely simulate what happens in GENE
+    d_dzdy_numeric = stencil2d_1d_5(d_z, stencil5) * scale;
+    gt::synchronize();
+  }
+  printf("%d/%d exchange time %0.4f\n", world_rank, world_size, total_time / n_iter);
 
   gt::copy(d_dzdy_numeric, h_dzdy_numeric);
   // gt::synchronize();
