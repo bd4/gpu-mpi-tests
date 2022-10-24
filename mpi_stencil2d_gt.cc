@@ -101,6 +101,8 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
   gt::gtensor_device<double, 2> rbuf_r(buf_shape);
   gt::gtensor_device<double, 2> rbuf_l(buf_shape);
 
+  int buf_size = buf_shape[0] * buf_shape[1];
+
   MPI_Request req_l[2];
   MPI_Request req_r[2];
 
@@ -117,14 +119,12 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
   // initiate async recv
   if (rank_l >= 0) {
-    // send/recv left boundary
-    MPI_Irecv(gt::raw_pointer_cast(rbuf_l.data()), n_bnd, MPI_DOUBLE, rank_l,
+    MPI_Irecv(gt::raw_pointer_cast(rbuf_l.data()), buf_size, MPI_DOUBLE, rank_l,
               123, comm, &req_l[0]);
   }
 
   if (rank_r < world_size) {
-    // send/recv right boundary
-    MPI_Irecv(gt::raw_pointer_cast(rbuf_r.data()), n_bnd, MPI_DOUBLE, rank_r,
+    MPI_Irecv(gt::raw_pointer_cast(rbuf_r.data()), buf_size, MPI_DOUBLE, rank_r,
               456, comm, &req_r[0]);
   }
 
@@ -133,34 +133,29 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
   // initiate async sends
   if (rank_l >= 0) {
-    MPI_Isend(gt::raw_pointer_cast(sbuf_l.data()), n_bnd, MPI_DOUBLE, rank_l,
+    MPI_Isend(gt::raw_pointer_cast(sbuf_l.data()), buf_size, MPI_DOUBLE, rank_l,
               456, comm, &req_l[1]);
   }
 
   if (rank_r < world_size) {
-    MPI_Isend(gt::raw_pointer_cast(sbuf_r.data()), n_bnd, MPI_DOUBLE, rank_r,
+    MPI_Isend(gt::raw_pointer_cast(sbuf_r.data()), buf_size, MPI_DOUBLE, rank_r,
               123, comm, &req_r[1]);
   }
 
+  // wait for send/recv to complete, then copy data back into main data array
   int mpi_rval;
   if (rank_l >= 0) {
     mpi_rval = MPI_Waitall(2, req_l, MPI_STATUSES_IGNORE);
     if (mpi_rval != MPI_SUCCESS) {
       printf("send_l error: %d\n", mpi_rval);
     }
+    d_z.view(_all, _s(0, n_bnd)) = rbuf_l;
   }
   if (rank_r < world_size) {
     mpi_rval = MPI_Waitall(2, req_r, MPI_STATUSES_IGNORE);
     if (mpi_rval != MPI_SUCCESS) {
       printf("send_r error: %d\n", mpi_rval);
     }
-  }
-
-  // copy recv data into non-contiguous location
-  if (rank_l >= 0) {
-    d_z.view(_all, _s(0, n_bnd)) = rbuf_l;
-  }
-  if (rank_r <= world_size) {
     d_z.view(_all, _s(-n_bnd, _)) = rbuf_r;
   }
 
@@ -231,7 +226,7 @@ int main(int argc, char** argv)
       double xtmp = (i - n_bnd) * dx;
       for (int j = 0; j < n_global; j++) {
         double ytmp = j * dx;
-        h_z(j, i + n_bnd) = fn(xtmp, ytmp);
+        h_z(j, i) = fn(xtmp, ytmp);
       }
     }
   }
