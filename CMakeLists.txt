@@ -50,3 +50,9 @@ else()
                               TARGET_DIRECTORY mpi_stencil_gt
                               PROPERTIES LANGUAGE CXX)
 endif()
+
+if ("${GTENSOR_DEVICE}" STREQUAL "sycl")
+  add_executable(mpi_stencil2d_sycl)
+  target_sources(mpi_stencil2d_sycl PRIVATE mpi_stencil2d_sycl.cc)
+  target_link_libraries(mpi_stencil2d_sycl MPI::MPI_CXX)
+endif()
