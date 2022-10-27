@@ -48,14 +48,14 @@ auto stencil2d_1d_5(sycl::queue& q, int nrows, int ncols, double* out2d,
     cgh.parallel_for(range, [=](sycl::item<2> item) {
       int row = item.get_id(1);
       int col = item.get_id(0);
-      int in_idx = idx2(nrows, row, col);
-      int stride = ncols + 4;
-      out2d[idx2(nrows, row, col)] = (stencil5[0] * in2d[in_idx + 0 * stride] +
-                                      stencil5[1] * in2d[in_idx + 1 * stride] +
-                                      stencil5[2] * in2d[in_idx + 2 * stride] +
-                                      stencil5[3] * in2d[in_idx + 3 * stride] +
-                                      stencil5[4] * in2d[in_idx + 4 * stride]) *
-                                     scale;
+      int base_idx = idx2(nrows, row, col);
+      int stride = nrows;
+      out2d[base_idx] = (stencil5[0] * in2d[base_idx + 0 * stride] +
+                         stencil5[1] * in2d[base_idx + 1 * stride] +
+                         stencil5[2] * in2d[base_idx + 2 * stride] +
+                         stencil5[3] * in2d[base_idx + 3 * stride] +
+                         stencil5[4] * in2d[base_idx + 4 * stride]) *
+                        scale;
     });
   });
   return e;
@@ -69,7 +69,8 @@ auto stencil2d_1d_5(sycl::queue& q, int nrows, int ncols, double* out2d,
 auto buf_from_view(sycl::queue& q, int nrows, double* buf, double* in,
                    int start, int end)
 {
-  auto range = sycl::range<2>(end - start + 1, nrows);
+  // Note: reverse index order because SYCL is row-major
+  auto range = sycl::range<2>(end - start, nrows);
   auto e = q.submit([&](sycl::handler& cgh) {
     cgh.parallel_for(range, [=](sycl::item<2> item) {
       int row = item.get_id(1);
@@ -83,12 +84,14 @@ auto buf_from_view(sycl::queue& q, int nrows, double* buf, double* in,
 /*
  * Copy contiguous buffer into second (non-contiguous) dimension of array as a
  * slice. Out has dimension nrows x ncols, buf has dimension nrows x (end -
- * start + 1).
+ * start + 1). ncols is not actually needed or used, just need start to end
+ * to be valid indexes.
  */
 auto buf_to_view(sycl::queue& q, int nrows, double* out, double* buf, int start,
                  int end)
 {
-  auto range = sycl::range<2>(end - start + 1, nrows);
+  // Note: reverse index order because SYCL is row-major
+  auto range = sycl::range<2>(end - start, nrows);
   auto e = q.submit([&](sycl::handler& cgh) {
     cgh.parallel_for(range, [=](sycl::item<2> item) {
       int row = item.get_id(1);
@@ -97,6 +100,47 @@ auto buf_to_view(sycl::queue& q, int nrows, double* out, double* buf, int start,
     });
   });
   return e;
+}
+
+void test_buf_view(sycl::queue& q, const int n)
+{
+  double* data = sycl::malloc_host<double>(n * n, q);
+  double* buf = sycl::malloc_host<double>(n * 2, q);
+  double* buf2 = sycl::malloc_host<double>(n * 2, q);
+
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < n; j++) {
+      data[j + i * n] = i + j / 1000.0;
+    }
+    buf2[i] = 100.0 + i;
+    buf2[i + n] = 100.0 + i + 0.1;
+  }
+
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < n; j++) {
+      printf("data[%d, %d] = %f\n", j, i, data[j + i * n]);
+    }
+  }
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < n; j++) {
+      printf("buf2[%d, %d] = %f\n", j, i, buf2[j + i * n]);
+    }
+  }
+
+  buf_from_view(q, n, buf, data, 0, 2).wait();
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < n; j++) {
+      printf("buf[%d, %d] = %f\n", j, i, buf[j + i * n]);
+    }
+  }
+
+  buf_to_view(q, n, data, buf2, n - 2, n).wait();
+
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < n; j++) {
+      printf("data[%d, %d] = %f\n", j, i, data[j + i * n]);
+    }
+  }
 }
 
 /*
@@ -143,6 +187,9 @@ sycl::queue get_rank_queue(int n_ranks, int rank)
     device_idx = rank;
   }
 
+  // printf("n_devices = %d\n", n_devices);
+  // printf("device_idx = %d\n", device_idx);
+
   return sycl::queue{devices[device_idx],
                      cl::sycl::property::queue::in_order()};
 }
@@ -185,17 +232,37 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
   // start async copy of ghost points into send buffers
   if (rank_l >= 0) {
+    // printf("rank_l = %d\n", rank_l); fflush(nullptr);
     // sbuf_l = d_z.view(_all, _s(n_bnd, 2 * n_bnd));
-    buf_from_view(q, n_global, sbuf_l, d_z, n_bnd, 2 * n_bnd);
+    auto e = buf_from_view(q, n_global, sbuf_l, d_z, n_bnd, 2 * n_bnd);
     if (stage_host) {
-      q.copy(sbuf_l, h_sbuf_l, buf_size);
+      q.copy(sbuf_l, h_sbuf_l, buf_size, e);
+      /*
+      for (int i = 0; i < n_bnd; i++) {
+        for (int j = 0; j < n_global; j++) {
+          int idx = idx2(n_global, j, i);
+          printf("sbuf_l[%d, %d] = %f\n", j, i, h_sbuf_l[idx]);
+          fflush(nullptr);
+        }
+      }
+      */
     }
   }
-  if (rank_r <= world_size) {
+  if (rank_r < world_size) {
+    // printf("rank_r = %d\n", rank_r); fflush(nullptr);
     // sbuf_r = d_z.view(_all, _s(-2 * n_bnd, -n_bnd));
-    buf_from_view(q, n_global, sbuf_l, d_z, n_local, n_local + n_bnd);
+    auto e = buf_from_view(q, n_global, sbuf_r, d_z, n_local, n_local + n_bnd);
     if (stage_host) {
-      q.copy(sbuf_r, h_sbuf_r, buf_size);
+      q.copy(sbuf_r, h_sbuf_r, buf_size, e);
+      /*
+      for (int i = 0; i < n_bnd; i++) {
+        for (int j = 0; j < n_global; j++) {
+          int idx = idx2(n_global, j, i);
+          printf("sbuf_r[%d, %d] = %f\n", j, i, h_sbuf_r[idx]);
+          fflush(nullptr);
+        }
+      }
+      */
     }
   }
 
@@ -252,6 +319,15 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
       printf("send_l error: %d\n", mpi_rval);
     }
     if (stage_host) {
+      /*
+      for (int i = 0; i < n_bnd; i++) {
+        for (int j = 0; j < n_global; j++) {
+          int idx = idx2(n_global, j, i);
+          printf("rbuf_l[%d, %d] = %f\n", j, i, h_rbuf_l[idx]);
+          fflush(nullptr);
+        }
+      }
+      */
       q.copy(h_rbuf_l, rbuf_l, buf_size);
     }
     // d_z.view(_all, _s(0, n_bnd)) = rbuf_l;
@@ -263,6 +339,15 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
       printf("send_r error: %d\n", mpi_rval);
     }
     if (stage_host) {
+      /*
+      for (int i = 0; i < n_bnd; i++) {
+        for (int j = 0; j < n_global; j++) {
+          int idx = idx2(n_global, j, i);
+          printf("rbuf_r[%d, %d] = %f\n", j, i, h_rbuf_r[idx]);
+          fflush(nullptr);
+        }
+      }
+      */
       q.copy(h_rbuf_r, rbuf_r, buf_size);
     }
     // d_z.view(_all, _s(-n_bnd, _)) = rbuf_r;
@@ -274,6 +359,10 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
 int main(int argc, char** argv)
 {
+  // sycl::queue q2{};
+  // test_buf_view(q2, 6);
+  // return EXIT_SUCCESS;
+
   // Note: domain will be n_global x n_global plus ghost points in one dimension
   int n_global = 8 * 1024;
   bool stage_host = false;
@@ -315,6 +404,7 @@ int main(int argc, char** argv)
 
   if (world_rank == 0) {
     printf("n procs    = %d\n", world_size);
+    printf("rank       = %d\n", world_rank);
     printf("n_global   = %d\n", n_global);
     printf("n_local    = %d\n", n_local);
     printf("n_iter     = %d\n", n_iter);
@@ -322,12 +412,15 @@ int main(int argc, char** argv)
     printf("stage_host = %d\n", stage_host);
   }
 
-  double* h_z = sycl::malloc_host<double>(n_global * n_local_with_ghost, q);
-  double* d_z = sycl::malloc_device<double>(n_global * n_local_with_ghost, q);
+  int z_size = n_global * n_local_with_ghost;
+  int dzdy_size = n_global * n_local;
 
-  double* h_dzdy_numeric = sycl::malloc_host<double>(n_global * n_local, q);
-  double* h_dzdy_actual = sycl::malloc_host<double>(n_global * n_local, q);
-  double* d_dzdy_numeric = sycl::malloc_device<double>(n_global * n_local, q);
+  double* h_z = sycl::malloc_host<double>(z_size, q);
+  double* d_z = sycl::malloc_device<double>(z_size, q);
+
+  double* h_dzdy_numeric = sycl::malloc_host<double>(dzdy_size, q);
+  double* h_dzdy_actual = sycl::malloc_host<double>(dzdy_size, q);
+  double* d_dzdy_numeric = sycl::malloc_device<double>(dzdy_size, q);
 
   double lx = 8;
   double dx = lx / n_global;
@@ -370,7 +463,18 @@ int main(int argc, char** argv)
     }
   }
 
-  q.copy(h_z, d_z, n_global * n_local_with_ghost);
+  /*
+  for (int i = 0; i < 5; i++) {
+    int idx = idx2(n_global, 1, i);
+    printf("%d row1-l %f\n", world_rank, h_z[idx]);
+  }
+  for (int i = 0; i < 5; i++) {
+    int idx = idx2(n_global, 1, n_local_with_ghost - 1 - i);
+    printf("%d row1-r %f\n", world_rank, h_z[idx]);
+  }
+  */
+
+  q.copy(h_z, d_z, z_size);
 
   for (int i = 0; i < n_warmup + n_iter; i++) {
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -391,10 +495,22 @@ int main(int argc, char** argv)
   printf("%d/%d exchange time %0.8f\n", world_rank, world_size,
          total_time / n_iter);
 
-  q.copy(d_dzdy_numeric, h_dzdy_numeric, n_global * n_local);
+  q.copy(d_dzdy_numeric, h_dzdy_numeric, dzdy_size).wait();
 
-  double err_norm =
-    diff_norm(q, n_global * n_local, h_dzdy_numeric, h_dzdy_actual);
+  /*
+  for (int i = 0; i < 5; i++) {
+    int idx = idx2(n_global, 8, i);
+    printf("%d la %f\n%d ln %f\n", world_rank, h_dzdy_actual[idx], world_rank,
+           h_dzdy_numeric[idx]);
+  }
+  for (int i = 0; i < 5; i++) {
+    int idx = idx2(n_global, 8, n_local - 1 - i);
+    printf("%d ra %f\n%d rn %f\n", world_rank, h_dzdy_actual[idx], world_rank,
+           h_dzdy_numeric[idx]);
+  }
+  */
+
+  double err_norm = diff_norm(q, dzdy_size, h_dzdy_numeric, h_dzdy_actual);
 
   printf("%d/%d [%d:0x%08x] err_norm = %.8f\n", world_rank, world_size,
          device_id, vendor_id, err_norm);

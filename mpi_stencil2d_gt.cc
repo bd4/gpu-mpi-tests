@@ -106,7 +106,7 @@ void set_rank_device(int n_ranks, int rank)
 // on device
 void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
                          gt::gtensor_device<double, 2>& d_z, int n_bnd,
-                         bool stage_host=false)
+                         bool stage_host = false)
 {
   auto buf_shape = gt::shape(d_z.shape(0), n_bnd);
   gt::gtensor_device<double, 2> sbuf_l(buf_shape);
@@ -118,7 +118,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
   if (stage_host) {
     host_buf_shape = buf_shape;
   } else {
-    host_buf_shape = { 0, 0 };
+    host_buf_shape = {0, 0};
   }
   gt::gtensor<double, 2> h_sbuf_l(host_buf_shape);
   gt::gtensor<double, 2> h_sbuf_r(host_buf_shape);
@@ -147,7 +147,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
   // initiate async recv
   if (rank_l >= 0) {
-    double *rbuf_l_data = nullptr;
+    double* rbuf_l_data = nullptr;
     if (stage_host) {
       rbuf_l_data = h_rbuf_l.data();
     } else {
@@ -158,7 +158,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
   }
 
   if (rank_r < world_size) {
-    double *rbuf_r_data = nullptr;
+    double* rbuf_r_data = nullptr;
     if (stage_host) {
       rbuf_r_data = h_rbuf_r.data();
     } else {
@@ -173,7 +173,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
   // initiate async sends
   if (rank_l >= 0) {
-    double *sbuf_l_data = nullptr;
+    double* sbuf_l_data = nullptr;
     if (stage_host) {
       sbuf_l_data = h_sbuf_l.data();
     } else {
@@ -184,7 +184,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
   }
 
   if (rank_r < world_size) {
-    double *sbuf_r_data = nullptr;
+    double* sbuf_r_data = nullptr;
     if (stage_host) {
       sbuf_r_data = h_sbuf_r.data();
     } else {
@@ -320,12 +320,22 @@ int main(int argc, char** argv)
     }
   }
 
+  /*
+  for (int i = 0; i < 5; i++) {
+    printf("%d row1-l %f\n", world_rank, h_z(1, i));
+  }
+  for (int i = 0; i < 5; i++) {
+    printf("%d row1-r %f\n", world_rank, h_z(1, n_local_with_ghost - 1 - i));
+  }
+  */
+
   gt::copy(h_z, d_z);
   // gt::synchronize();
 
   for (int i = 0; i < n_warmup + n_iter; i++) {
     clock_gettime(CLOCK_MONOTONIC, &start);
-    boundary_exchange_y(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd, stage_host);
+    boundary_exchange_y(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd,
+                        stage_host);
     clock_gettime(CLOCK_MONOTONIC, &end);
     iter_time =
       ((end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) * 1.0e-9);
@@ -338,20 +348,20 @@ int main(int argc, char** argv)
     d_dzdy_numeric = stencil2d_1d_5(d_z, stencil5) * scale;
     gt::synchronize();
   }
-  printf("%d/%d exchange time %0.8f\n", world_rank, world_size, total_time / n_iter);
+  printf("%d/%d exchange time %0.8f\n", world_rank, world_size,
+         total_time / n_iter);
 
   gt::copy(d_dzdy_numeric, h_dzdy_numeric);
-  // gt::synchronize();
 
   /*
   for (int i = 0; i < 5; i++) {
-    printf("{0} l {1}\n{0} l {2}\n", world_rank, h_dzdy_actual(i),
-               h_dzdy_numeric(i));
+    printf("%d la %f\n%d ln %f\n", world_rank, h_dzdy_actual(8, i), world_rank,
+           h_dzdy_numeric(8, i));
   }
   for (int i = 0; i < 5; i++) {
     int idx = n_local - 1 - i;
-    printf("{0} r {1}\n{0} r {2}\n", world_rank, h_dzdy_actual(idx),
-               h_dzdy_numeric(idx));
+    printf("%d ra %f\n%d rn %f\n", world_rank, h_dzdy_actual(8, idx),
+           world_rank, h_dzdy_numeric(8, idx));
   }
   */
 
