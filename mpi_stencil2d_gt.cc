@@ -27,6 +27,16 @@
 
 using namespace gt::placeholders;
 
+inline void check(const char* fname, int line, int mpi_rval)
+{
+  if (mpi_rval != MPI_SUCCESS) {
+    printf("%s:%d error %d\n", fname, line, mpi_rval);
+    exit(2);
+  }
+}
+
+#define CHECK(x) check(__FILE__, __LINE__, (x))
+
 // little hack to make code parameterizable on managed vs device memory
 namespace gt
 {
@@ -65,18 +75,18 @@ static const gt::gtensor<double, 1> stencil5 = {1.0 / 12.0, -2.0 / 3.0, 0.0,
 
 /*
  * Return unevaluated expression that calculates the 1d stencil in the
- * second dimension of a 2d array.
+ * first dimension of a 2d array.
  *
  * Size of the result will be size of z with minus 4 in second dimension.
  */
 inline auto stencil2d_1d_5(const gt::gtensor_device<double, 2>& z,
                            const gt::gtensor<double, 1>& stencil)
 {
-  return stencil(0) * z.view(_all, _s(0, -4)) +
-         stencil(1) * z.view(_all, _s(1, -3)) +
-         stencil(2) * z.view(_all, _s(2, -2)) +
-         stencil(3) * z.view(_all, _s(3, -1)) +
-         stencil(4) * z.view(_all, _s(4, _));
+  return stencil(0) * z.view(_s(0, -4), _all) +
+         stencil(1) * z.view(_s(1, -3), _all) +
+         stencil(2) * z.view(_s(2, -2), _all) +
+         stencil(3) * z.view(_s(3, -1), _all) +
+         stencil(4) * z.view(_s(4, _), _all);
 }
 
 void set_rank_device(int n_ranks, int rank)
@@ -104,11 +114,11 @@ void set_rank_device(int n_ranks, int rank)
 
 // exchange in non-contiguous second dimension, staging into contiguous buffers
 // on device
-void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
+void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
                          gt::gtensor_device<double, 2>& d_z, int n_bnd,
                          bool stage_host = false)
 {
-  auto buf_shape = gt::shape(d_z.shape(0), n_bnd);
+  auto buf_shape = gt::shape(n_bnd, d_z.shape(1));
   gt::gtensor_device<double, 2> sbuf_l(buf_shape);
   gt::gtensor_device<double, 2> sbuf_r(buf_shape);
   gt::gtensor_device<double, 2> rbuf_r(buf_shape);
@@ -133,13 +143,13 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
 
   // start async copy of ghost points into send buffers
   if (rank_l >= 0) {
-    sbuf_l = d_z.view(_all, _s(n_bnd, 2 * n_bnd));
+    sbuf_l = d_z.view(_s(n_bnd, 2 * n_bnd), _all);
     if (stage_host) {
       gt::copy(sbuf_l, h_sbuf_l);
     }
   }
   if (rank_r <= world_size) {
-    sbuf_r = d_z.view(_all, _s(-2 * n_bnd, -n_bnd));
+    sbuf_r = d_z.view(_s(-2 * n_bnd, -n_bnd), _all);
     if (stage_host) {
       gt::copy(sbuf_r, h_sbuf_r);
     }
@@ -153,8 +163,8 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     } else {
       rbuf_l_data = rbuf_l.data().get();
     }
-    MPI_Irecv(rbuf_l_data, rbuf_l.size(), MPI_DOUBLE, rank_l, 123, comm,
-              &req_l[0]);
+    CHECK(MPI_Irecv(rbuf_l_data, rbuf_l.size(), MPI_DOUBLE, rank_l, 123, comm,
+                    &req_l[0]));
   }
 
   if (rank_r < world_size) {
@@ -164,8 +174,8 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     } else {
       rbuf_r_data = rbuf_r.data().get();
     }
-    MPI_Irecv(rbuf_r_data, rbuf_r.size(), MPI_DOUBLE, rank_r, 456, comm,
-              &req_r[0]);
+    CHECK(MPI_Irecv(rbuf_r_data, rbuf_r.size(), MPI_DOUBLE, rank_r, 456, comm,
+                    &req_r[0]));
   }
 
   // wait for send buffer fill
@@ -179,8 +189,8 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     } else {
       sbuf_l_data = sbuf_l.data().get();
     }
-    MPI_Isend(sbuf_l_data, sbuf_l.size(), MPI_DOUBLE, rank_l, 456, comm,
-              &req_l[1]);
+    CHECK(MPI_Isend(sbuf_l_data, sbuf_l.size(), MPI_DOUBLE, rank_l, 456, comm,
+                    &req_l[1]));
   }
 
   if (rank_r < world_size) {
@@ -190,31 +200,35 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     } else {
       sbuf_r_data = sbuf_r.data().get();
     }
-    MPI_Isend(sbuf_r_data, sbuf_r.size(), MPI_DOUBLE, rank_r, 123, comm,
-              &req_r[1]);
+    CHECK(MPI_Isend(sbuf_r_data, sbuf_r.size(), MPI_DOUBLE, rank_r, 123, comm,
+                    &req_r[1]));
   }
 
   // wait for send/recv to complete, then copy data back into main data array
   int mpi_rval;
   if (rank_l >= 0) {
-    mpi_rval = MPI_Waitall(2, req_l, MPI_STATUSES_IGNORE);
+    MPI_Status status[2];
+    mpi_rval = MPI_Waitall(2, req_l, status);
     if (mpi_rval != MPI_SUCCESS) {
-      printf("send_l error: %d\n", mpi_rval);
+      printf("send_l error: %d (%d %d)\n", mpi_rval, status[0].MPI_ERROR,
+             status[1].MPI_ERROR);
     }
     if (stage_host) {
       gt::copy(h_rbuf_l, rbuf_l);
     }
-    d_z.view(_all, _s(0, n_bnd)) = rbuf_l;
+    d_z.view(_s(0, n_bnd), _all) = rbuf_l;
   }
   if (rank_r < world_size) {
-    mpi_rval = MPI_Waitall(2, req_r, MPI_STATUSES_IGNORE);
+    MPI_Status status[2];
+    mpi_rval = MPI_Waitall(2, req_r, status);
     if (mpi_rval != MPI_SUCCESS) {
-      printf("send_r error: %d\n", mpi_rval);
+      printf("send_r error: %d (%d %d)\n", mpi_rval, status[0].MPI_ERROR,
+             status[1].MPI_ERROR);
     }
     if (stage_host) {
       gt::copy(h_rbuf_r, rbuf_r);
     }
-    d_z.view(_all, _s(-n_bnd, _)) = rbuf_r;
+    d_z.view(_s(-n_bnd, _), _all) = rbuf_r;
   }
 
   gt::synchronize();
@@ -245,10 +259,10 @@ int main(int argc, char** argv)
   int world_size, world_rank, device_id;
   uint32_t vendor_id;
 
-  MPI_Init(NULL, NULL);
+  CHECK(MPI_Init(NULL, NULL));
 
-  MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-  MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+  CHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
+  CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &world_rank));
 
   if (n_global % world_size != 0) {
     printf("%d nmpi (%d) must be divisor of domain size (%d), exiting\n",
@@ -272,50 +286,50 @@ int main(int argc, char** argv)
     printf("stage_host = %d\n", stage_host);
   }
 
-  auto h_z = gt::empty<double>({n_global, n_local_with_ghost});
-  auto d_z = gt::empty_device<double>({n_global, n_local_with_ghost});
+  auto h_z = gt::empty<double>({n_local_with_ghost, n_global});
+  auto d_z = gt::empty_device<double>({n_local_with_ghost, n_global});
 
-  auto h_dzdy_numeric = gt::empty<double>({n_global, n_local});
-  auto h_dzdy_actual = gt::empty<double>({n_global, n_local});
-  auto d_dzdy_numeric = gt::empty_device<double>({n_global, n_local});
+  auto h_dzdx_numeric = gt::empty<double>({n_local, n_global});
+  auto h_dzdx_actual = gt::empty<double>({n_local, n_global});
+  auto d_dzdx_numeric = gt::empty_device<double>({n_local, n_global});
 
   double lx = 8;
   double dx = lx / n_global;
   double lx_local = lx / world_size;
   double scale = n_global / lx;
-  auto fn = [](double x, double y) { return x * x + y * y; };
-  auto fn_dzdy = [](double x, double y) { return 2 * x; };
+  auto fn = [](double x, double y) { return x * x * x + y * y; };
+  auto fn_dzdx = [](double x, double y) { return 3 * x * x; };
 
   struct timespec start, end;
   double iter_time = 0.0;
   double total_time = 0.0;
 
   double x_start = world_rank * lx_local;
-  for (int i = 0; i < n_local; i++) {
-    double xtmp = x_start + i * dx;
-    for (int j = 0; j < n_global; j++) {
-      double ytmp = j * dx;
-      h_z(j, i + n_bnd) = fn(xtmp, ytmp);
-      h_dzdy_actual(j, i) = fn_dzdy(xtmp, ytmp);
+  for (int j = 0; j < n_global; j++) {
+    double ytmp = j * dx;
+    for (int i = 0; i < n_local; i++) {
+      double xtmp = x_start + i * dx;
+      h_z(i + n_bnd, j) = fn(xtmp, ytmp);
+      h_dzdx_actual(i, j) = fn_dzdx(xtmp, ytmp);
     }
   }
 
   // fill boundary points on ends
   if (world_rank == 0) {
-    for (int i = 0; i < n_bnd; i++) {
-      double xtmp = (i - n_bnd) * dx;
-      for (int j = 0; j < n_global; j++) {
-        double ytmp = j * dx;
-        h_z(j, i) = fn(xtmp, ytmp);
+    for (int j = 0; j < n_global; j++) {
+      double ytmp = j * dx;
+      for (int i = 0; i < n_bnd; i++) {
+        double xtmp = (i - n_bnd) * dx;
+        h_z(i, j) = fn(xtmp, ytmp);
       }
     }
   }
   if (world_rank == world_size - 1) {
-    for (int i = 0; i < n_bnd; i++) {
-      double xtmp = lx + i * dx;
-      for (int j = 0; j < n_global; j++) {
-        double ytmp = j * dx;
-        h_z(j, n_bnd + n_local + i) = fn(xtmp, ytmp);
+    for (int j = 0; j < n_global; j++) {
+      double ytmp = j * dx;
+      for (int i = 0; i < n_bnd; i++) {
+        double xtmp = lx + i * dx;
+        h_z(n_bnd + n_local + i, j) = fn(xtmp, ytmp);
       }
     }
   }
@@ -334,7 +348,7 @@ int main(int argc, char** argv)
 
   for (int i = 0; i < n_warmup + n_iter; i++) {
     clock_gettime(CLOCK_MONOTONIC, &start);
-    boundary_exchange_y(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd,
+    boundary_exchange_x(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd,
                         stage_host);
     clock_gettime(CLOCK_MONOTONIC, &end);
     iter_time =
@@ -345,27 +359,27 @@ int main(int argc, char** argv)
     }
 
     // do some calculation, to try to more closely simulate what happens in GENE
-    d_dzdy_numeric = stencil2d_1d_5(d_z, stencil5) * scale;
+    d_dzdx_numeric = stencil2d_1d_5(d_z, stencil5) * scale;
     gt::synchronize();
   }
   printf("%d/%d exchange time %0.8f\n", world_rank, world_size,
          total_time / n_iter);
 
-  gt::copy(d_dzdy_numeric, h_dzdy_numeric);
+  gt::copy(d_dzdx_numeric, h_dzdx_numeric);
 
   /*
   for (int i = 0; i < 5; i++) {
-    printf("%d la %f\n%d ln %f\n", world_rank, h_dzdy_actual(8, i), world_rank,
-           h_dzdy_numeric(8, i));
+    printf("%d la %f\n%d ln %f\n", world_rank, h_dzdx_actual(8, i), world_rank,
+           h_dzdx_numeric(8, i));
   }
   for (int i = 0; i < 5; i++) {
     int idx = n_local - 1 - i;
-    printf("%d ra %f\n%d rn %f\n", world_rank, h_dzdy_actual(8, idx),
-           world_rank, h_dzdy_numeric(8, idx));
+    printf("%d ra %f\n%d rn %f\n", world_rank, h_dzdx_actual(8, idx),
+           world_rank, h_dzdx_numeric(8, idx));
   }
   */
 
-  double err_norm = std::sqrt(gt::sum_squares(h_dzdy_numeric - h_dzdy_actual));
+  double err_norm = std::sqrt(gt::sum_squares(h_dzdx_numeric - h_dzdx_actual));
 
   printf("%d/%d [%d:0x%08x] err_norm = %.8f\n", world_rank, world_size,
          device_id, vendor_id, err_norm);
