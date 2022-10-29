@@ -112,8 +112,7 @@ void set_rank_device(int n_ranks, int rank)
   gt::backend::clib::device_set(device);
 }
 
-// exchange in non-contiguous second dimension, staging into contiguous buffers
-// on device
+// exchange in first dimension, staging into contiguous buffers on device
 void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
                          gt::gtensor_device<double, 2>& d_z, int n_bnd,
                          bool stage_host = false)
