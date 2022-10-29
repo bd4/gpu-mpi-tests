@@ -509,8 +509,8 @@ int main(int argc, char** argv)
     auto e = stencil2d_1d_5(q, n_local, n_global, d_dzdx_numeric, d_z, scale);
     e.wait();
   }
-  printf("%d/%d exchange time %0.8f\n", world_rank, world_size,
-         total_time / n_iter);
+  printf("%d/%d exchange time %0.8f ms\n", world_rank, world_size,
+         total_time / n_iter * 1000);
 
   q.copy(d_dzdx_numeric, h_dzdx_numeric, dzdx_size).wait();
 

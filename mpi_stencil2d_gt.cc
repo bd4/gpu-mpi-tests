@@ -361,8 +361,8 @@ int main(int argc, char** argv)
     d_dzdx_numeric = stencil2d_1d_5(d_z, stencil5) * scale;
     gt::synchronize();
   }
-  printf("%d/%d exchange time %0.8f\n", world_rank, world_size,
-         total_time / n_iter);
+  printf("%d/%d exchange time %0.8f ms\n", world_rank, world_size,
+         total_time / n_iter * 1000);
 
   gt::copy(d_dzdx_numeric, h_dzdx_numeric);
 
