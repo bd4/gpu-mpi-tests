@@ -18,7 +18,7 @@
  * gtensor. Note that the owning class is not trivially copyable and not device
  * copyable, because it must have a non-trivial destructor.
  *
- * TODO: Since no temparories are used, perhaps a helper that allocates and
+ * TODO: Since no temporaries are used, perhaps a helper that allocates and
  * returns a span is a simpler option to create this minimal example?
  */
 
@@ -32,6 +32,16 @@
 #include <type_traits>
 
 #include "sycl/sycl.hpp"
+
+// #define DEBUG
+
+#ifdef DEBUG
+#define dprintf(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define dprintf(...)                                                           \
+  do {                                                                         \
+  } while (0)
+#endif
 
 constexpr std::size_t idx2(int n, int row, int col)
 {
@@ -63,11 +73,17 @@ public:
   // Note: shallow const
   reference operator()(int row, int col) const
   {
+    assert(row < nrows_);
+    assert(col < ncols_);
     return data_[idx2(nrows_, row, col)];
   }
 
   // Note: shallow const
-  reference operator[](size_type i) const { return data_[i]; }
+  reference operator[](size_type i) const
+  {
+    assert(i < (nrows_ * ncols_));
+    return data_[i];
+  }
 
   int nrows() const { return nrows_; }
   int ncols() const { return ncols_; }
@@ -84,6 +100,20 @@ private:
   const int nrows_;
   const int ncols_;
 };
+
+template <typename T>
+auto empty_host(sycl::queue& q, int nrows, int ncols)
+{
+  T* data = sycl::malloc(nrows * ncols, q, sycl::usm::alloc::host);
+  return span2d<T, sycl::usm::alloc::host>(data, nrows, ncols);
+}
+
+template <typename T>
+auto empty_device(sycl::queue& q, int nrows, int ncols)
+{
+  T* data = sycl::malloc(nrows * ncols, q, sycl::usm::alloc::device);
+  return span2d<T, sycl::usm::alloc::device>(data, nrows, ncols);
+}
 
 template <typename T, sycl::usm::alloc Alloc>
 class array2d : public span2d<T, Alloc>
@@ -103,7 +133,8 @@ public:
       q_(q)
   {}
 
-  ~array2d() { sycl::free(this->data(), q_); }
+  // Results in a double free, why?
+  // ~array2d() { sycl::free(this->data(), q_); }
 
   // skip these to keep the example simple, pass by reference everywhere
   array2d(const array2d& other) = delete;
@@ -134,6 +165,7 @@ template <typename Array>
 auto copy_dest_slice(sycl::queue& q, Array& src, Array& dest, int dim,
                      int start, int end)
 {
+  dprintf("copy dest_slice %d %d %d\n", dim, start, end);
   auto s_src = src.to_span();
   auto s_dest = dest.to_span();
   assert(dim == 0 || dim == 1);
@@ -142,11 +174,15 @@ auto copy_dest_slice(sycl::queue& q, Array& src, Array& dest, int dim,
     if (start < 0) {
       start += dest.nrows();
     }
-    if (end == 0 && start > end) {
+    if (end < 0) {
+      end += dest.nrows();
+    } else if (end == 0 && start > end) {
       end = dest.nrows();
     }
     assert(start < end);
     auto range = sycl::range<2>(dest.ncols(), end - start);
+    dprintf("d_z < buf range %d - %d (%d, %d)\n", start, end, dest.ncols(),
+            end - start);
     auto e = q.submit([&](sycl::handler& cgh) {
       cgh.parallel_for(range, [=](sycl::item<2> item) {
         int row = item.get_id(1);
@@ -160,7 +196,9 @@ auto copy_dest_slice(sycl::queue& q, Array& src, Array& dest, int dim,
     if (start < 0) {
       start += dest.ncols();
     }
-    if (end == 0 && start > end) {
+    if (end < 0) {
+      end += dest.ncols();
+    } else if (end == 0 && start > end) {
       end = dest.ncols();
     }
     auto range = sycl::range<2>(end - start, dest.nrows());
@@ -175,10 +213,12 @@ auto copy_dest_slice(sycl::queue& q, Array& src, Array& dest, int dim,
   }
 }
 
-template <typename T, sycl::usm::alloc Alloc>
-auto copy_src_slice(sycl::queue& q, span2d<T, Alloc>& src,
-                    span2d<T, Alloc>& dest, int dim, int start, int end)
+template <typename Array>
+auto copy_src_slice(sycl::queue& q, Array& src, Array& dest, int dim, int start,
+                    int end)
 {
+  dprintf("copy  src_slice %d %d %d (%d, %d) -> (%d, %d)\n", dim, start, end,
+          src.nrows(), src.ncols(), dest.nrows(), dest.ncols());
   assert(dim == 0 || dim == 1);
   auto s_src = src.to_span();
   auto s_dest = dest.to_span();
@@ -187,10 +227,14 @@ auto copy_src_slice(sycl::queue& q, span2d<T, Alloc>& src,
     if (start < 0) {
       start += src.nrows();
     }
-    if (end == 0 && start > end) {
+    if (end < 0) {
+      end += src.nrows();
+    } else if (end == 0 && start > end) {
       end = src.nrows();
     }
     auto range = sycl::range<2>(dest.ncols(), end - start);
+    dprintf("buf < d_z range %d - %d (%d, %d)\n", start, end, dest.ncols(),
+            end - start);
     auto e = q.submit([&](sycl::handler& cgh) {
       cgh.parallel_for(range, [=](sycl::item<2> item) {
         int row = item.get_id(1);
@@ -204,7 +248,9 @@ auto copy_src_slice(sycl::queue& q, span2d<T, Alloc>& src,
     if (start < 0) {
       start += src.ncols();
     }
-    if (end == 0 && start > end) {
+    if (end < 0) {
+      end += src.ncols();
+    } else if (end == 0 && start > end) {
       end = src.ncols();
     }
     auto range = sycl::range<2>(end - start, dest.nrows());
@@ -245,7 +291,6 @@ auto stencil2d_1d_5(sycl::queue& q, Array& out2d, Array& in2d, double scale)
 {
   // Note: swap index order; SYCL is row-major oriented, and this example
   // is col-major
-  int in_nrows = in2d.nrows();
   auto range = sycl::range<2>(out2d.ncols(), out2d.nrows());
   auto s_in2d = in2d.to_span();
   auto s_out2d = out2d.to_span();
@@ -253,14 +298,12 @@ auto stencil2d_1d_5(sycl::queue& q, Array& out2d, Array& in2d, double scale)
     cgh.parallel_for(range, [=](sycl::item<2> item) {
       int row = item.get_id(1);
       int col = item.get_id(0);
-      int out_idx = idx2(s_out2d.nrows(), row, col);
-      int in_base_idx = idx2(s_in2d.nrows(), row, col);
-      s_out2d[out_idx] = (stencil5[0] * s_in2d[in_base_idx + 0] +
-                          stencil5[1] * s_in2d[in_base_idx + 1] +
-                          stencil5[2] * s_in2d[in_base_idx + 2] +
-                          stencil5[3] * s_in2d[in_base_idx + 3] +
-                          stencil5[4] * s_in2d[in_base_idx + 4]) *
-                         scale;
+      s_out2d(row, col) = (stencil5[0] * s_in2d(row + 0, col) +
+                           stencil5[1] * s_in2d(row + 1, col) +
+                           stencil5[2] * s_in2d(row + 2, col) +
+                           stencil5[3] * s_in2d(row + 3, col) +
+                           stencil5[4] * s_in2d(row + 4, col)) *
+                          scale;
     });
   });
   return e;
@@ -310,8 +353,8 @@ sycl::queue get_rank_queue(int n_ranks, int rank)
     device_idx = rank;
   }
 
-  // printf("n_devices = %d\n", n_devices);
-  // printf("device_idx = %d\n", device_idx);
+  dprintf("%d: n_devices = %d\n", rank, n_devices);
+  dprintf("%d: device_idx = %d\n", rank, device_idx);
 
   return sycl::queue{devices[device_idx], sycl::property::queue::in_order()};
 }
@@ -350,37 +393,35 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
 
   // start async copy of ghost points into send buffers
   if (rank_l >= 0) {
-    // printf("rank_l = %d\n", rank_l); fflush(nullptr);
+    dprintf("%d: rank_l = %d\n", rank, rank_l);
+    fflush(nullptr);
     // sbuf_l = d_z.view(_all, _s(n_bnd, 2 * n_bnd));
-    copy_src_slice(q, d_z, sbuf_l, 0, n_bnd, 2 * n_bnd);
+    auto e = copy_src_slice(q, d_z, sbuf_l, 0, n_bnd, 2 * n_bnd);
     if (stage_host) {
-      copy(q, sbuf_l, h_sbuf_l);
-      /*
-      for (int i = 0; i < n_bnd; i++) {
-        for (int j = 0; j < n_global; j++) {
-          int idx = idx2(n_global, j, i);
-          printf("sbuf_l[%d, %d] = %f\n", j, i, h_sbuf_l[idx]);
+      e.wait();
+      copy(q, sbuf_l, h_sbuf_l).wait();
+      for (int i = 0; i < h_sbuf_l.ncols(); i++) {
+        for (int j = 0; j < h_sbuf_l.nrows(); j++) {
+          dprintf("%d: sbuf_l[%d, %d] = %f\n", rank, j, i, h_sbuf_l(j, i));
           fflush(nullptr);
         }
       }
-      */
     }
   }
   if (rank_r < world_size) {
-    // printf("rank_r = %d\n", rank_r); fflush(nullptr);
+    dprintf("%d: rank_r = %d\n", rank, rank_r);
+    fflush(nullptr);
     // sbuf_r = d_z.view(_all, _s(-2 * n_bnd, -n_bnd));
-    copy_src_slice(q, d_z, sbuf_l, 0, -2 * n_bnd, -n_bnd);
+    auto e = copy_src_slice(q, d_z, sbuf_r, 0, -2 * n_bnd, -n_bnd);
     if (stage_host) {
-      copy(q, sbuf_r, h_sbuf_r);
-      /*
-      for (int i = 0; i < n_bnd; i++) {
-        for (int j = 0; j < n_global; j++) {
-          int idx = idx2(n_global, j, i);
-          printf("sbuf_r[%d, %d] = %f\n", j, i, h_sbuf_r[idx]);
+      e.wait();
+      copy(q, sbuf_r, h_sbuf_r).wait();
+      for (int i = 0; i < h_sbuf_r.ncols(); i++) {
+        for (int j = 0; j < h_sbuf_r.nrows(); j++) {
+          dprintf("%d: sbuf_r[%d, %d] = %f\n", rank, j, i, h_sbuf_r(j, i));
           fflush(nullptr);
         }
       }
-      */
     }
   }
 
@@ -434,19 +475,18 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
   if (rank_l >= 0) {
     mpi_rval = MPI_Waitall(2, req_l, MPI_STATUSES_IGNORE);
     if (mpi_rval != MPI_SUCCESS) {
-      printf("send_l error: %d\n", mpi_rval);
+      printf("%d: send_l error: %d\n", rank, mpi_rval);
     }
     if (stage_host) {
-      /*
-      for (int i = 0; i < n_bnd; i++) {
-        for (int j = 0; j < n_global; j++) {
-          int idx = idx2(n_global, j, i);
-          printf("rbuf_l[%d, %d] = %f\n", j, i, h_rbuf_l[idx]);
+#ifdef DEBUG
+      for (int i = 0; i < h_rbuf_l.ncols(); i++) {
+        for (int j = 0; j < h_rbuf_l.nrows(); j++) {
+          dprintf("%d: rbuf_l[%d, %d] = %f\n", rank, j, i, h_rbuf_l(j, i));
           fflush(nullptr);
         }
       }
-      */
-      copy(q, h_rbuf_l, rbuf_l);
+#endif
+      copy(q, h_rbuf_l, rbuf_l).wait();
     }
     // d_z.view(_all, _s(0, n_bnd)) = rbuf_l;
     copy_dest_slice(q, rbuf_l, d_z, 0, 0, n_bnd);
@@ -454,19 +494,18 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
   if (rank_r < world_size) {
     mpi_rval = MPI_Waitall(2, req_r, MPI_STATUSES_IGNORE);
     if (mpi_rval != MPI_SUCCESS) {
-      printf("send_r error: %d\n", mpi_rval);
+      printf("%d: send_r error: %d\n", rank, mpi_rval);
     }
     if (stage_host) {
-      /*
-      for (int i = 0; i < n_bnd; i++) {
-        for (int j = 0; j < n_global; j++) {
-          int idx = idx2(n_global, j, i);
-          printf("rbuf_r[%d, %d] = %f\n", j, i, h_rbuf_r[idx]);
+#ifdef DEBUG
+      for (int i = 0; i < h_rbuf_r.ncols(); i++) {
+        for (int j = 0; j < h_rbuf_r.nrows(); j++) {
+          dprintf("%d: rbuf_r[%d, %d] = %f\n", rank, j, i, h_rbuf_r(j, i));
           fflush(nullptr);
         }
       }
-      */
-      copy(q, h_rbuf_r, rbuf_r);
+#endif
+      copy(q, h_rbuf_r, rbuf_r).wait();
     }
     // d_z.view(_all, _s(-n_bnd, _)) = rbuf_r;
     copy_dest_slice(q, rbuf_r, d_z, 0, -n_bnd, 0);
@@ -484,10 +523,6 @@ int main(int argc, char** argv)
     "span2d device not trivial");
   static_assert(std::is_trivially_copyable_v<span2d<T, sycl::usm::alloc::host>>,
                 "span2d host not trivial");
-
-  // sycl::queue q2{};
-  // test_buf_view(q2, 6);
-  // return EXIT_SUCCESS;
 
   // Note: domain will be n_global x n_global plus ghost points in one dimension
   int n_global = 8 * 1024;
@@ -507,6 +542,12 @@ int main(int argc, char** argv)
     n_iter = std::atoi(argv[3]);
   }
 
+#ifdef DEBUG
+  n_global /= 1024;
+  n_iter = 1;
+  n_warmup = 0;
+#endif
+
   int n_sten = 5;
   int n_bnd = (n_sten - 1) / 2;
   int world_size, world_rank, device_id;
@@ -518,7 +559,7 @@ int main(int argc, char** argv)
   MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
   if (n_global % world_size != 0) {
-    printf("%d nmpi (%d) must be divisor of domain size (%d), exiting\n",
+    printf("%d: nmpi (%d) must be divisor of domain size (%d), exiting\n",
            world_rank, world_size, n_global);
     exit(1);
   }
@@ -527,6 +568,8 @@ int main(int argc, char** argv)
   const int n_local_with_ghost = n_local + 2 * n_bnd;
 
   sycl::queue q = get_rank_queue(world_size, world_rank);
+
+  vendor_id = q.get_device().get_info<sycl::info::device::vendor_id>();
 
   if (world_rank == 0) {
     printf("n procs    = %d\n", world_size);
@@ -561,45 +604,59 @@ int main(int argc, char** argv)
   double total_time = 0.0;
 
   double x_start = world_rank * lx_local;
-  for (int j = 0; j < n_global; j++) {
+  for (int j = 0; j < h_z.ncols(); j++) {
     double ytmp = j * dx;
     for (int i = 0; i < n_local; i++) {
       double xtmp = x_start + i * dx;
-      h_z[idx2(n_local_with_ghost, i + n_bnd, j)] = fn(xtmp, ytmp);
-      h_dzdx_actual[idx2(n_local, i, j)] = fn_dzdx(xtmp, ytmp);
+      h_z(i + n_bnd, j) = fn(xtmp, ytmp);
+      h_dzdx_actual(i, j) = fn_dzdx(xtmp, ytmp);
     }
   }
 
   // fill boundary points on ends
   if (world_rank == 0) {
-    for (int j = 0; j < n_global; j++) {
+    for (int j = 0; j < h_z.ncols(); j++) {
       double ytmp = j * dx;
       for (int i = 0; i < n_bnd; i++) {
         double xtmp = (i - n_bnd) * dx;
-        h_z[idx2(n_local_with_ghost, i, j)] = fn(xtmp, ytmp);
+        h_z(i, j) = fn(xtmp, ytmp);
       }
     }
   }
   if (world_rank == world_size - 1) {
-    for (int j = 0; j < n_global; j++) {
+    for (int j = 0; j < h_z.ncols(); j++) {
       double ytmp = j * dx;
       for (int i = 0; i < n_bnd; i++) {
         double xtmp = lx + i * dx;
-        h_z[idx2(n_local_with_ghost, n_bnd + n_local + i, j)] = fn(xtmp, ytmp);
+        h_z(n_bnd + n_local + i, j) = fn(xtmp, ytmp);
       }
     }
   }
 
-  /*
-  for (int i = 0; i < 5; i++) {
-    int idx = idx2(n_global, 1, i);
-    printf("%d row1-l %f\n", world_rank, h_z[idx]);
+#ifdef DEBUG
+  for (int r = 0; r < world_size; r++) {
+    if (r != world_rank) {
+      continue;
+    }
+
+    for (int i = n_bnd; i < 2 * n_bnd; i++) {
+      dprintf("%d: [%d, :]", world_rank, i);
+      for (int j = 0; j < std::min(20, h_z.ncols()); j++) {
+        dprintf(" %f", h_z(i, j));
+      }
+      dprintf("\n");
+    }
+    for (int i = h_z.nrows() - 2 * n_bnd; i < h_z.nrows() - n_bnd; i++) {
+      dprintf("%d: [%d, :]", world_rank, i);
+      for (int j = 0; j < std::min(20, h_z.ncols()); j++) {
+        dprintf(" %f", h_z(i, j));
+      }
+      dprintf("\n");
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
   }
-  for (int i = 0; i < 5; i++) {
-    int idx = idx2(n_global, 1, n_local_with_ghost - 1 - i);
-    printf("%d row1-r %f\n", world_rank, h_z[idx]);
-  }
-  */
+#endif
 
   copy(q, h_z, d_z);
 
@@ -619,7 +676,7 @@ int main(int argc, char** argv)
     auto e = stencil2d_1d_5(q, d_dzdx_numeric, d_z, scale);
     e.wait();
   }
-  printf("%d/%d exchange time %0.8f ms\n", world_rank, world_size,
+  printf("%d: exchange time %0.8f ms\n", world_rank,
          total_time / n_iter * 1000);
 
   copy(q, d_dzdx_numeric, h_dzdx_numeric).wait();
@@ -640,8 +697,7 @@ int main(int argc, char** argv)
   double err_norm = diff_norm(q, h_dzdx_numeric.size(), h_dzdx_numeric.data(),
                               h_dzdx_actual.data());
 
-  printf("%d/%d [%d:0x%08x] err_norm = %.8f\n", world_rank, world_size,
-         device_id, vendor_id, err_norm);
+  printf("%d: [0x%08x] err_norm = %.8f\n", world_rank, vendor_id, err_norm);
 
   MPI_Finalize();
 
