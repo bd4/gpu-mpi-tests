@@ -6,8 +6,8 @@ project(mpi-daxpy-test)
 # add dependencies
 include(cmake/CPM.cmake)
 CPMFindPackage(NAME gtensor
-               GITHUB_REPOSITORY bd4/gtensor
-               GIT_TAG "pr/sycl-include-refactor"
+               GITHUB_REPOSITORY wdmapp/gtensor
+               GIT_TAG "main"
                OPTIONS "GTENSOR_ENABLE_BLAS ON")
 
 find_package(MPI REQUIRED)
