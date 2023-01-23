@@ -16,6 +16,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <iostream>
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +37,7 @@ inline void check(const char* fname, int line, int mpi_rval)
 static constexpr double stencil5[] = {1.0 / 12.0, -2.0 / 3.0, 0.0, 2.0 / 3.0,
                                       -1.0 / 12.0};
 
-constexpr int idx2(int n, int row, int col)
+inline constexpr std::size_t idx2(int n, int row, int col)
 {
   return row + col * n;
 }
@@ -183,7 +184,7 @@ sycl::queue get_rank_queue(int n_ranks, int rank)
 {
   int n_devices, device_idx, ranks_per_device;
 
-  cl::sycl::platform p{cl::sycl::default_selector()};
+  sycl::platform p{sycl::default_selector_v};
   auto devices = p.get_devices();
   n_devices = devices.size();
 
@@ -204,8 +205,7 @@ sycl::queue get_rank_queue(int n_ranks, int rank)
   // printf("n_devices = %d\n", n_devices);
   // printf("device_idx = %d\n", device_idx);
 
-  return sycl::queue{devices[device_idx],
-                     cl::sycl::property::queue::in_order()};
+  return sycl::queue{devices[device_idx], sycl::property::queue::in_order()};
 }
 
 // exchange in first dimension, staging into contiguous buffers on device
@@ -418,6 +418,15 @@ int main(int argc, char** argv)
   const int n_local_with_ghost = n_local + 2 * n_bnd;
 
   sycl::queue q = get_rank_queue(world_size, world_rank);
+  auto dev = q.get_device();
+
+  if (dev.has(sycl::aspect::ext_intel_pci_address)) {
+    auto BDF = dev.get_info<sycl::ext::intel::info::device::pci_address>();
+    auto UUID = dev.get_info<sycl::ext::intel::info::device::uuid>();
+    uint32_t uuid_first = UUID[3] | (UUID[2] << 8) | (UUID[1] << 16) | (UUID[0] << 24);
+    std::cout << world_rank << " " << BDF << "(" << std::hex << uuid_first
+              << ")" << std::endl;
+  }
 
   if (world_rank == 0) {
     printf("n procs    = %d\n", world_size);
