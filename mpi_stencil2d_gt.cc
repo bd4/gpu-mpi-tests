@@ -374,9 +374,9 @@ template <int Dim, typename S>
 void print_test_name(bool use_buffers)
 {
   if constexpr (std::is_same<S, gt::space::device>::value) {
-    printf("=== TEST dim:%d, device , buf:%d\n", Dim, use_buffers);
+    printf("TEST dim:%d, device , buf:%d", Dim, use_buffers);
   } else {
-    printf("=== TEST dim:%d, managed, buf:%d\n", Dim, use_buffers);
+    printf("TEST dim:%d, managed, buf:%d", Dim, use_buffers);
   }
 }
 
@@ -409,10 +409,6 @@ void test(int device_id, uint32_t vendor_id, int world_size, int world_rank,
     nx_local_ghost = n_global;
     ny_local = n_local;
     ny_local_ghost = n_local + 2 * n_bnd;
-  }
-
-  if (world_rank == 0) {
-    print_test_name<Dim, S>(use_buffers);
   }
 
   gt::shape_type<2> z_shape(nx_local_ghost, ny_local_ghost);
@@ -534,8 +530,10 @@ void test(int device_id, uint32_t vendor_id, int world_size, int world_rank,
     }
     gt::synchronize();
   }
+#ifdef DEBUG
   printf("%d/%d exchange time %0.8f ms\n", world_rank, world_size,
          total_time / n_iter * 1000);
+#endif
 
   gt::copy(d_dz_numeric, h_dz_numeric);
 
@@ -553,8 +551,21 @@ void test(int device_id, uint32_t vendor_id, int world_size, int world_rank,
 
   double err_norm = std::sqrt(gt::sum_squares(h_dz_numeric - h_dz_actual));
 
+#ifdef DEBUG
   printf("%d/%d [%d:0x%08x] err_norm = %.8f\n", world_rank, world_size,
          device_id, vendor_id, err_norm);
+#endif
+
+  double time_sum;
+  MPI_Reduce(&total_time, &time_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+  double err_sum;
+  MPI_Reduce(&err_norm, &err_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+  if (world_rank == 0) {
+    print_test_name<Dim, S>(use_buffers);
+    printf("; %0.8f, err=%0.8f\n", time_sum, err_sum);
+  }
 }
 
 int main(int argc, char** argv)
@@ -603,23 +614,23 @@ int main(int argc, char** argv)
 
   fflush(stdout);
 
-  // test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
-  //                            n_global, n_iter, true, 5);
-  // test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
-  //                            n_global, n_iter, false, 5);
-  // test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
-  //                             n_global, n_iter, true, 5);
-  // test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
-  //                             n_global, n_iter, false, 5);
+  test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
+                             n_global, n_iter, true, 5);
+  test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
+                             n_global, n_iter, false, 5);
+  test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
+                              n_global, n_iter, true, 5);
+  test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
+                              n_global, n_iter, false, 5);
 
   test<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
                              n_global, n_iter, true, 5);
   test<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
                              n_global, n_iter, false, 5);
-  // test<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
-  //                             n_global, n_iter, true, 5);
-  // test<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
-  //                             n_global, n_iter, false, 5);
+  test<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
+                              n_global, n_iter, true, 5);
+  test<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
+                              n_global, n_iter, false, 5);
 
   MPI_Finalize();
 
