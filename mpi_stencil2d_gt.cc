@@ -80,7 +80,7 @@ static const gt::gtensor<double, 1> stencil5 = {1.0 / 12.0, -2.0 / 3.0, 0.0,
  * Size of the result will be size of z with minus 4 in second dimension.
  */
 template <typename S>
-inline auto stencil2d_1d_5(const gt::ext::gtensor2<double, 2, S>& z,
+inline auto stencil2d_1d_5_d0(const gt::ext::gtensor2<double, 2, S>& z,
                            const gt::gtensor<double, 1>& stencil)
 {
   return stencil(0) * z.view(_s(0, -4), _all) +
@@ -88,6 +88,23 @@ inline auto stencil2d_1d_5(const gt::ext::gtensor2<double, 2, S>& z,
          stencil(2) * z.view(_s(2, -2), _all) +
          stencil(3) * z.view(_s(3, -1), _all) +
          stencil(4) * z.view(_s(4, _), _all);
+}
+
+/*
+ * Return unevaluated expression that calculates the 1d stencil in the
+ * second dimension of a 2d array.
+ *
+ * Size of the result will be size of z with minus 4 in second dimension.
+ */
+template <typename S>
+inline auto stencil2d_1d_5_d1(const gt::ext::gtensor2<double, 2, S>& z,
+                           const gt::gtensor<double, 1>& stencil)
+{
+  return stencil(0) * z.view(_all, _s(0, -4)) +
+         stencil(1) * z.view(_all, _s(1, -3)) +
+         stencil(2) * z.view(_all, _s(2, -2)) +
+         stencil(3) * z.view(_all, _s(3, -1)) +
+         stencil(4) * z.view(_all, _s(4, _));
 }
 
 void set_rank_device(int n_ranks, int rank)
@@ -235,104 +252,246 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
   gt::synchronize();
 }
 
-int main(int argc, char** argv)
+// exchange in second dimension, optional staging into device buffer
+template <typename S>
+void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
+                         gt::ext::gtensor2<double, 2, S>& d_z, int n_bnd,
+                         bool stage_device)
 {
-  using S = gt::space::managed;
-
-  // Note: domain will be n_global x n_global plus ghost points in one dimension
-  int n_global = 8 * 1024;
-  bool stage_host = false;
-  int n_iter = 100;
-  int n_warmup = 5;
-
-  if (argc > 1) {
-    n_global = std::atoi(argv[1]) * 1024;
+  gt::shape_type<2> buf_shape;
+  if (stage_device) {
+    buf_shape = gt::shape(d_z.shape(0), n_bnd);
+  } else {
+    buf_shape = {0, 0};
   }
-  if (argc > 2) {
-    if (argv[2][0] == '1') {
-      stage_host = true;
+
+  gt::gtensor_device<double, 2> sbuf_l(buf_shape);
+  gt::gtensor_device<double, 2> sbuf_r(buf_shape);
+  gt::gtensor_device<double, 2> rbuf_r(buf_shape);
+  gt::gtensor_device<double, 2> rbuf_l(buf_shape);
+
+  MPI_Request req_l[2];
+  MPI_Request req_r[2];
+
+  int rank_l = (rank - 1) % world_size;
+  int rank_r = (rank + 1) % world_size;
+
+  auto sv_l = gt::view_strided(d_z, _all, _s(n_bnd, 2 * n_bnd));
+  auto sv_r = gt::view_strided(d_z, _all, _s(-2 * n_bnd, -n_bnd));
+  auto rv_l = gt::view_strided(d_z, _all, _s(0, n_bnd));
+  auto rv_r = gt::view_strided(d_z, _all, _s(-n_bnd, _));
+  // start async copy of ghost points into send buffers
+  if (rank_l >= 0) {
+    if (stage_device) {
+      sbuf_l = sv_l;
     }
   }
-  if (argc > 3) {
-    n_iter = std::atoi(argv[3]);
+  if (rank_r <= world_size) {
+    if (stage_device) {
+      sbuf_r = sv_r;
+    }
   }
+
+  // initiate async recv
+  if (rank_l >= 0) {
+    double* rbuf_l_data = nullptr;
+    if (stage_device) {
+      rbuf_l_data = rbuf_l.data().get();
+    } else {
+      rbuf_l_data = rv_l.data().get();
+    }
+    CHECK(MPI_Irecv(rbuf_l_data, rbuf_l.size(), MPI_DOUBLE, rank_l, 123, comm,
+                    &req_l[0]));
+  }
+
+  if (rank_r < world_size) {
+    double* rbuf_r_data = nullptr;
+    if (stage_device) {
+      rbuf_r_data = rbuf_r.data().get();
+    } else {
+      rbuf_r_data = rv_r.data().get();
+    }
+    CHECK(MPI_Irecv(rbuf_r_data, rbuf_r.size(), MPI_DOUBLE, rank_r, 456, comm,
+                    &req_r[0]));
+  }
+
+  // wait for send buffer fill
+  gt::synchronize();
+
+  // initiate async sends
+  if (rank_l >= 0) {
+    double* sbuf_l_data = nullptr;
+    if (stage_device) {
+      sbuf_l_data = sbuf_l.data().get();
+    } else {
+      sbuf_l_data = sv_l.data().get();
+    }
+    CHECK(MPI_Isend(sbuf_l_data, sbuf_l.size(), MPI_DOUBLE, rank_l, 456, comm,
+                    &req_l[1]));
+  }
+
+  if (rank_r < world_size) {
+    double* sbuf_r_data = nullptr;
+    if (stage_device) {
+      sbuf_r_data = sbuf_r.data().get();
+    } else {
+      sbuf_r_data = sv_r.data().get();
+    }
+    CHECK(MPI_Isend(sbuf_r_data, sbuf_r.size(), MPI_DOUBLE, rank_r, 123, comm,
+                    &req_r[1]));
+  }
+
+  // wait for send/recv to complete, then copy data back into main data array
+  int mpi_rval;
+  if (rank_l >= 0) {
+    MPI_Status status[2];
+    mpi_rval = MPI_Waitall(2, req_l, status);
+    if (mpi_rval != MPI_SUCCESS) {
+      printf("send_l error: %d (%d %d)\n", mpi_rval, status[0].MPI_ERROR,
+             status[1].MPI_ERROR);
+    }
+    if (stage_device) {
+      gt::copy(rbuf_l, rv_l);
+    }
+  }
+  if (rank_r < world_size) {
+    MPI_Status status[2];
+    mpi_rval = MPI_Waitall(2, req_r, status);
+    if (mpi_rval != MPI_SUCCESS) {
+      printf("send_r error: %d (%d %d)\n", mpi_rval, status[0].MPI_ERROR,
+             status[1].MPI_ERROR);
+    }
+    if (stage_device) {
+      gt::copy(rbuf_r, rv_r);
+    }
+  }
+
+  gt::synchronize();
+}
+
+template <int Dim, typename S>
+void print_test_name(bool use_buffers)
+{
+  if constexpr (std::is_same<S, gt::space::device>::value) {
+    printf("=== TEST dim:%d, device , buf:%d\n", Dim, use_buffers);
+  } else {
+    printf("=== TEST dim:%d, managed, buf:%d\n", Dim, use_buffers);
+  }
+}
+
+template <typename S, int Dim>
+void test(int device_id, uint32_t vendor_id, int world_size, int world_rank,
+          int n_global, int n_iter, bool use_buffers, int n_warmup=5)
+{
+  // Note: domain will be n_global x n_global plus ghost points in one dimension
 
   int n_sten = 5;
   int n_bnd = (n_sten - 1) / 2;
-  int world_size, world_rank, device_id;
-  uint32_t vendor_id;
-
-  CHECK(MPI_Init(NULL, NULL));
-
-  CHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
-  CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &world_rank));
-
-  if (n_global % world_size != 0) {
-    printf("%d nmpi (%d) must be divisor of domain size (%d), exiting\n",
-           world_rank, world_size, n_global);
-    exit(1);
-  }
 
   const int n_local = n_global / world_size;
-  const int n_local_with_ghost = n_local + 2 * n_bnd;
 
-  set_rank_device(world_size, world_rank);
-  device_id = gt::backend::clib::device_get();
-  vendor_id = gt::backend::clib::device_get_vendor_id(device_id);
+  int nx_local, ny_local;
+  int nx_local_ghost, ny_local_ghost;
+  int nx_bnd, ny_bnd;
 
-  if (world_rank == 0) {
-    printf("n procs    = %d\n", world_size);
-    printf("n_global   = %d\n", n_global);
-    printf("n_local    = %d\n", n_local);
-    printf("n_iter     = %d\n", n_iter);
-    printf("n_warmup   = %d\n", n_warmup);
-    printf("stage_host = %d\n", stage_host);
+  if constexpr (Dim == 0) {
+    nx_bnd = n_bnd;
+    ny_bnd = 0;
+    nx_local = n_local;
+    nx_local_ghost = n_local + 2 * n_bnd;
+    ny_local = n_global;
+    ny_local_ghost = n_global;
+  } else {
+    nx_bnd = 0;
+    ny_bnd = n_bnd;
+    nx_local = n_global;
+    nx_local_ghost = n_global;
+    ny_local = n_local;
+    ny_local_ghost = n_local + 2 * n_bnd;
   }
 
-  auto h_z = gt::empty<double>({n_local_with_ghost, n_global});
-  gt::ext::gtensor2<double, 2, S> d_z(h_z.shape());
+  if (world_rank == 0) {
+    print_test_name<Dim, S>(use_buffers);
+  }
 
-  auto h_dzdx_numeric = gt::empty<double>({n_local, n_global});
-  auto h_dzdx_actual = gt::empty<double>({n_local, n_global});
-  gt::ext::gtensor2<double, 2, S> d_dzdx_numeric(h_dzdx_numeric.shape());
+  gt::shape_type<2> z_shape(nx_local_ghost, ny_local_ghost);
+  gt::shape_type<2> dz_shape(nx_local, ny_local);
 
-  double lx = 8;
-  double dx = lx / n_global;
-  double lx_local = lx / world_size;
-  double scale = n_global / lx;
+  auto h_z = gt::empty<double>(z_shape);
+  gt::ext::gtensor2<double, 2, S> d_z(z_shape);
+
+  auto h_dz_numeric = gt::empty<double>(dz_shape);
+  auto h_dz_actual = gt::empty<double>(dz_shape);
+  gt::ext::gtensor2<double, 2, S> d_dz_numeric(dz_shape);
+
+  double ln = 8;
+  double delta = ln / n_global;
+  double ln_local = ln / world_size;
+  double scale = n_global / ln;
   auto fn = [](double x, double y) { return x * x * x + y * y; };
   auto fn_dzdx = [](double x, double y) { return 3 * x * x; };
+  auto fn_dzdy = [](double x, double y) { return 2 * y; };
 
   struct timespec start, end;
   double iter_time = 0.0;
   double total_time = 0.0;
 
-  double x_start = world_rank * lx_local;
-  for (int j = 0; j < n_global; j++) {
-    double ytmp = j * dx;
-    for (int i = 0; i < n_local; i++) {
-      double xtmp = x_start + i * dx;
-      h_z(i + n_bnd, j) = fn(xtmp, ytmp);
-      h_dzdx_actual(i, j) = fn_dzdx(xtmp, ytmp);
+  double x_start=0, y_start=0;
+  if constexpr (Dim == 0) {
+    x_start = world_rank * ln_local;
+  } else {
+    y_start = world_rank * ln_local;
+  }
+  for (int j = 0; j < ny_local; j++) {
+    double ytmp = y_start + j * delta;
+    for (int i = 0; i < nx_local; i++) {
+      double xtmp = x_start + i * delta;
+      h_z(i + nx_bnd, j + ny_bnd) = fn(xtmp, ytmp);
+      if constexpr (Dim == 0) {
+        h_dz_actual(i, j) = fn_dzdx(xtmp, ytmp);
+      } else {
+        h_dz_actual(i, j) = fn_dzdy(xtmp, ytmp);
+      }
     }
   }
 
   // fill boundary points on ends
-  if (world_rank == 0) {
-    for (int j = 0; j < n_global; j++) {
-      double ytmp = j * dx;
-      for (int i = 0; i < n_bnd; i++) {
-        double xtmp = (i - n_bnd) * dx;
-        h_z(i, j) = fn(xtmp, ytmp);
+  if constexpr (Dim == 0) {
+    if (world_rank == 0) {
+      for (int j = 0; j < ny_local; j++) {
+        double ytmp = j * delta;
+        for (int i = 0; i < nx_bnd; i++) {
+          double xtmp = (i - nx_bnd) * delta;
+          h_z(i, j) = fn(xtmp, ytmp);
+        }
       }
     }
-  }
-  if (world_rank == world_size - 1) {
-    for (int j = 0; j < n_global; j++) {
-      double ytmp = j * dx;
-      for (int i = 0; i < n_bnd; i++) {
-        double xtmp = lx + i * dx;
-        h_z(n_bnd + n_local + i, j) = fn(xtmp, ytmp);
+    if (world_rank == world_size - 1) {
+      for (int j = 0; j < ny_local; j++) {
+        double ytmp = j * delta;
+        for (int i = 0; i < nx_bnd; i++) {
+          double xtmp = ln + i * delta;
+          h_z(nx_bnd + nx_local + i, j) = fn(xtmp, ytmp);
+        }
+      }
+    }
+  } else {
+    if (world_rank == 0) {
+      for (int j = 0; j < ny_bnd; j++) {
+        double ytmp = (j - ny_bnd) * delta;
+        for (int i = 0; i < nx_local; i++) {
+          double xtmp = i * delta;
+          h_z(i, j) = fn(xtmp, ytmp);
+        }
+      }
+    }
+    if (world_rank == world_size - 1) {
+      for (int j = 0; j < ny_bnd; j++) {
+        double ytmp = ln + j * delta;
+        for (int i = 0; i < nx_local; i++) {
+          double xtmp = i * delta;
+          h_z(i, ny_bnd + ny_local + j) = fn(xtmp, ytmp);
+        }
       }
     }
   }
@@ -351,8 +510,13 @@ int main(int argc, char** argv)
 
   for (int i = 0; i < n_warmup + n_iter; i++) {
     clock_gettime(CLOCK_MONOTONIC, &start);
-    boundary_exchange_x<S>(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd,
-                           stage_host);
+    if constexpr (Dim == 0) {
+      boundary_exchange_x<S>(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd,
+                             use_buffers);
+    } else {
+      boundary_exchange_y<S>(MPI_COMM_WORLD, world_size, world_rank, d_z, n_bnd,
+                             use_buffers);
+    }
     clock_gettime(CLOCK_MONOTONIC, &end);
     iter_time =
       ((end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) * 1.0e-9);
@@ -362,13 +526,17 @@ int main(int argc, char** argv)
     }
 
     // do some calculation, to try to more closely simulate what happens in GENE
-    d_dzdx_numeric = stencil2d_1d_5<S>(d_z, stencil5) * scale;
+    if constexpr (Dim == 0) {
+      d_dz_numeric = stencil2d_1d_5_d0<S>(d_z, stencil5) * scale;
+    } else {
+      d_dz_numeric = stencil2d_1d_5_d1<S>(d_z, stencil5) * scale;
+    }
     gt::synchronize();
   }
   printf("%d/%d exchange time %0.8f ms\n", world_rank, world_size,
          total_time / n_iter * 1000);
 
-  gt::copy(d_dzdx_numeric, h_dzdx_numeric);
+  gt::copy(d_dz_numeric, h_dz_numeric);
 
   /*
   for (int i = 0; i < 5; i++) {
@@ -382,10 +550,74 @@ int main(int argc, char** argv)
   }
   */
 
-  double err_norm = std::sqrt(gt::sum_squares(h_dzdx_numeric - h_dzdx_actual));
+  double err_norm = std::sqrt(gt::sum_squares(h_dz_numeric - h_dz_actual));
 
   printf("%d/%d [%d:0x%08x] err_norm = %.8f\n", world_rank, world_size,
          device_id, vendor_id, err_norm);
+
+}
+
+int main(int argc, char** argv)
+{
+  using S = gt::space::managed;
+
+  // Note: domain will be n_global x n_global plus ghost points in one dimension
+  int n_global = 8 * 1024;
+  int n_iter = 100;
+  int n_warmup = 5;
+
+  if (argc > 1) {
+    n_global = std::atoi(argv[1]) * 1024;
+  }
+  if (argc > 2) {
+    n_iter = std::atoi(argv[2]);
+  }
+
+  int world_size, world_rank, device_id;
+  uint32_t vendor_id;
+
+  CHECK(MPI_Init(NULL, NULL));
+
+  CHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
+  CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &world_rank));
+
+  if (n_global % world_size != 0) {
+    printf("%d nmpi (%d) must be divisor of domain size (%d), exiting\n",
+           world_rank, world_size, n_global);
+    exit(1);
+  }
+
+  const int n_local = n_global / world_size;
+
+  set_rank_device(world_size, world_rank);
+  device_id = gt::backend::clib::device_get();
+  vendor_id = gt::backend::clib::device_get_vendor_id(device_id);
+
+  if (world_rank == 0) {
+    printf("n procs    = %d\n", world_size);
+    printf("n_global   = %d\n", n_global);
+    printf("n_local    = %d\n", n_local);
+    printf("n_iter     = %d\n", n_iter);
+    printf("n_warmup   = %d\n", n_warmup);
+  }
+
+  fflush(stdout);
+
+/*
+  test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, true, 5);
+  test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, false, 5);
+  test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, true, 5);
+  test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, false, 5);
+
+  test<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, true, 5);
+  test<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, false, 5);
+  test<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, true, 5);
+  test<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, false, 5);
+  */
+  test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, true, 5);
+  test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, false, 5);
+  test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, true, 5);
+  test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank, n_global, n_iter, false, 5);
 
   MPI_Finalize();
 
