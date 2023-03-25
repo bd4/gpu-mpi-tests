@@ -299,7 +299,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     } else {
       rbuf_l_data = rv_l.data().get();
     }
-    CHECK(MPI_Irecv(rbuf_l_data, rbuf_l.size(), MPI_DOUBLE, rank_l, 123, comm,
+    CHECK(MPI_Irecv(rbuf_l_data, rv_l.size(), MPI_DOUBLE, rank_l, 123, comm,
                     &req_l[0]));
   }
 
@@ -310,14 +310,14 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     } else {
       rbuf_r_data = rv_r.data().get();
     }
-    CHECK(MPI_Irecv(rbuf_r_data, rbuf_r.size(), MPI_DOUBLE, rank_r, 456, comm,
+    CHECK(MPI_Irecv(rbuf_r_data, rv_r.size(), MPI_DOUBLE, rank_r, 456, comm,
                     &req_r[0]));
   }
 
   // wait for send buffer fill
-  if (stage_device) {
-    gt::synchronize();
-  }
+  // if (stage_device) {
+  gt::synchronize();
+  // }
 
   // initiate async sends
   if (rank_l >= 0) {
@@ -327,7 +327,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     } else {
       sbuf_l_data = sv_l.data().get();
     }
-    CHECK(MPI_Isend(sbuf_l_data, sbuf_l.size(), MPI_DOUBLE, rank_l, 456, comm,
+    CHECK(MPI_Isend(sbuf_l_data, sv_l.size(), MPI_DOUBLE, rank_l, 456, comm,
                     &req_l[1]));
   }
 
@@ -338,7 +338,7 @@ void boundary_exchange_y(MPI_Comm comm, int world_size, int rank,
     } else {
       sbuf_r_data = sv_r.data().get();
     }
-    CHECK(MPI_Isend(sbuf_r_data, sbuf_r.size(), MPI_DOUBLE, rank_r, 123, comm,
+    CHECK(MPI_Isend(sbuf_r_data, sv_r.size(), MPI_DOUBLE, rank_r, 123, comm,
                     &req_r[1]));
   }
 
