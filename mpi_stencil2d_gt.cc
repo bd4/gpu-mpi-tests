@@ -27,6 +27,8 @@
 
 using namespace gt::placeholders;
 
+const double PI = 3.141592653598793;
+
 inline void check(const char* fname, int line, int mpi_rval)
 {
   if (mpi_rval != MPI_SUCCESS) {
@@ -381,8 +383,9 @@ void print_test_name(bool use_buffers)
 }
 
 template <typename S, int Dim>
-void test(int device_id, uint32_t vendor_id, int world_size, int world_rank,
-          int n_global, int n_iter, bool use_buffers, int n_warmup = 5)
+void test_deriv(int device_id, uint32_t vendor_id, int world_size,
+                int world_rank, int n_global, int n_iter, bool use_buffers,
+                int n_warmup = 5)
 {
   // Note: domain will be n_global x n_global plus ghost points in one dimension
 
@@ -568,6 +571,82 @@ void test(int device_id, uint32_t vendor_id, int world_size, int world_rank,
   }
 }
 
+template <typename S, int Dim>
+void test_sum(int device_id, uint32_t vendor_id, int world_size, int world_rank,
+              int n_global, int n_iter, int n_warmup = 5)
+{
+  // Note: domain will be n_global x n_global plus ghost points in one dimension
+  const int n_local = n_global / world_size;
+
+  int nx_local, ny_local;
+
+  struct timespec start, end;
+  double iter_time = 0.0;
+  double total_time = 0.0;
+
+  if constexpr (Dim == 0) {
+    nx_local = n_local;
+    ny_local = n_global;
+  } else {
+    nx_local = n_global;
+    ny_local = n_local;
+  }
+
+  gt::shape_type<2> z_shape(nx_local, ny_local);
+
+  gt::ext::gtensor2<double, 2, S> d_z(z_shape, PI / world_size);
+
+  // reduction test
+  gt::shape_type<1> sum_shape;
+  if constexpr (Dim == 0) {
+    sum_shape = gt::shape(d_z.shape(0));
+  } else {
+    sum_shape = gt::shape(d_z.shape(1));
+  }
+  gt::ext::gtensor2<double, 1, S> d_sum(sum_shape);
+  gt::gtensor<double, 1> h_sum(sum_shape);
+  for (int i = 0; i < n_warmup + n_iter; i++) {
+    if constexpr (Dim == 0) {
+      gt::sum_axis_to(d_sum, d_z, 0);
+      gt::synchronize();
+
+      clock_gettime(CLOCK_MONOTONIC, &start);
+      CHECK(MPI_Allreduce(MPI_IN_PLACE, d_sum.data().get(), d_sum.size(),
+                          MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD));
+
+      clock_gettime(CLOCK_MONOTONIC, &end);
+    } else {
+      gt::sum_axis_to(d_sum, d_z, 1);
+      gt::synchronize();
+
+      clock_gettime(CLOCK_MONOTONIC, &start);
+      CHECK(MPI_Allreduce(MPI_IN_PLACE, d_sum.data().get(), d_sum.size(),
+                          MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD));
+      clock_gettime(CLOCK_MONOTONIC, &end);
+    }
+    iter_time =
+      ((end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) * 1.0e-9);
+
+    if (i >= n_warmup) {
+      total_time += iter_time;
+    }
+  }
+#ifdef DEBUG
+  printf("%d/%d allreduce time %0.8f ms\n", world_rank, world_size,
+         total_time / n_iter * 1000);
+#endif
+
+  gt::copy(d_sum, h_sum);
+
+  double time_sum;
+  MPI_Reduce(&total_time, &time_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+  if (world_rank == 0) {
+    print_test_name<Dim, S>(false);
+    printf("; allreduce=%0.8f\n", time_sum);
+  }
+}
+
 int main(int argc, char** argv)
 {
   using S = gt::space::managed;
@@ -614,23 +693,32 @@ int main(int argc, char** argv)
 
   fflush(stdout);
 
-  test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
-                             n_global, n_iter, true, 5);
-  test<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
-                             n_global, n_iter, false, 5);
-  test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
-                              n_global, n_iter, true, 5);
-  test<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
-                              n_global, n_iter, false, 5);
+  test_deriv<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
+                                   n_global, n_iter, true, 5);
+  test_deriv<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
+                                   n_global, n_iter, false, 5);
+  test_deriv<gt::space::managed, 0>(device_id, vendor_id, world_size,
+                                    world_rank, n_global, n_iter, true, 5);
+  test_deriv<gt::space::managed, 0>(device_id, vendor_id, world_size,
+                                    world_rank, n_global, n_iter, false, 5);
 
-  test<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
-                             n_global, n_iter, true, 5);
-  test<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
-                             n_global, n_iter, false, 5);
-  test<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
-                              n_global, n_iter, true, 5);
-  test<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
-                              n_global, n_iter, false, 5);
+  test_deriv<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
+                                   n_global, n_iter, true, 5);
+  test_deriv<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
+                                   n_global, n_iter, false, 5);
+  test_deriv<gt::space::managed, 1>(device_id, vendor_id, world_size,
+                                    world_rank, n_global, n_iter, true, 5);
+  test_deriv<gt::space::managed, 1>(device_id, vendor_id, world_size,
+                                    world_rank, n_global, n_iter, false, 5);
+
+  test_sum<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
+                                 n_global, n_iter, 5);
+  test_sum<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
+                                  n_global, n_iter, 5);
+  test_sum<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
+                                 n_global, n_iter, 5);
+  test_sum<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
+                                  n_global, n_iter, 5);
 
   MPI_Finalize();
 
