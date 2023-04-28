@@ -653,8 +653,8 @@ int main(int argc, char** argv)
 
   // Note: domain will be n_global x n_global plus ghost points in one dimension
   int n_global = 8 * 1024;
-  int n_iter = 100;
-  int n_warmup = 5;
+  int n_iter = 1000;
+  int n_warmup = 10;
 
   if (argc > 1) {
     n_global = std::atoi(argv[1]) * 1024;
@@ -697,28 +697,36 @@ int main(int argc, char** argv)
                                    n_global, n_iter, true, 5);
   test_deriv<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
                                    n_global, n_iter, false, 5);
+#ifdef TEST_MANAGED
   test_deriv<gt::space::managed, 0>(device_id, vendor_id, world_size,
                                     world_rank, n_global, n_iter, true, 5);
   test_deriv<gt::space::managed, 0>(device_id, vendor_id, world_size,
                                     world_rank, n_global, n_iter, false, 5);
+#endif
 
   test_deriv<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
                                    n_global, n_iter, true, 5);
   test_deriv<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
                                    n_global, n_iter, false, 5);
+#ifdef TEST_MANAGED
   test_deriv<gt::space::managed, 1>(device_id, vendor_id, world_size,
                                     world_rank, n_global, n_iter, true, 5);
   test_deriv<gt::space::managed, 1>(device_id, vendor_id, world_size,
                                     world_rank, n_global, n_iter, false, 5);
+#endif
 
   test_sum<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
                                  n_global, n_iter, 5);
+#ifdef TEST_MANAGED
   test_sum<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
                                   n_global, n_iter, 5);
+#endif
   test_sum<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
                                  n_global, n_iter, 5);
+#ifdef TEST_MANAGED
   test_sum<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
                                   n_global, n_iter, 5);
+#endif
 
   MPI_Finalize();
 

@@ -3,11 +3,13 @@ cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 # create project
 project(mpi-daxpy-test)
 
+option(TEST_MANAGED "Test managed memory" ON)
+
 # add dependencies
 include(cmake/CPM.cmake)
 CPMFindPackage(NAME gtensor
-               GITHUB_REPOSITORY bd4/gtensor
-               GIT_TAG "pr/view-contiguous"
+               GITHUB_REPOSITORY wdmapp/gtensor
+               GIT_TAG "main"
                OPTIONS "GTENSOR_ENABLE_BLAS ON")
 
 set(MPI_CXX_SKIP_MPICXX ON)
@@ -32,7 +34,17 @@ add_executable(mpi_stencil2d_gt)
 target_sources(mpi_stencil2d_gt PRIVATE mpi_stencil2d_gt.cc)
 target_link_libraries(mpi_stencil2d_gt PRIVATE gtensor::gtensor)
 target_link_libraries(mpi_stencil2d_gt PRIVATE MPI::MPI_CXX)
-target_compile_features(mpi_stencil2d_gt PRIVATE cxx_std_17)
+#target_compile_features(mpi_stencil2d_gt PRIVATE cxx_std_17)
+if (TEST_MANAGED)
+  message(STATUS "${PROJECT_NAME}: Enabling managed memory")
+  target_compile_definitions(mpi_stencil2d_gt PRIVATE TEST_MANAGED)
+endif()
+if (GTENSOR_DEVICE STREQUAL "hip" AND DEFINED ENV{PE_MPICH_GTL_DIR_amd_gfx90a})
+  message(STATUS "${PROJECT_NAME}: Linking gtl libs for HIP backend")
+  target_link_options(mpi_stencil2d_gt PRIVATE
+                      $ENV{PE_MPICH_GTL_DIR_amd_gfx90a}
+                      $ENV{PE_MPICH_GTL_LIBS_amd_gfx90a})
+endif()
 
 if ("${GTENSOR_DEVICE}" STREQUAL "cuda") 
   set_source_files_properties(mpi_daxpy_gt.cc
