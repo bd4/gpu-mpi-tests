@@ -384,34 +384,34 @@ void print_test_name(bool use_buffers)
 
 template <typename S, int Dim>
 void test_deriv(int device_id, uint32_t vendor_id, int world_size,
-                int world_rank, int n_global, int n_iter, bool use_buffers,
-                int n_warmup = 5)
+                int world_rank, std::size_t n_local_deriv, std::size_t n_global_other,
+                int n_iter, bool use_buffers, int n_warmup = 5)
 {
-  // Note: domain will be n_global x n_global plus ghost points in one dimension
+  // Note: domain will be n_global_dervi * n_global_other
 
   int n_sten = 5;
   int n_bnd = (n_sten - 1) / 2;
 
-  const int n_local = n_global / world_size;
+  std::size_t n_global_deriv = n_local_deriv * world_size;
 
-  int nx_local, ny_local;
-  int nx_local_ghost, ny_local_ghost;
+  std::size_t nx_local, ny_local;
+  std::size_t nx_local_ghost, ny_local_ghost;
   int nx_bnd, ny_bnd;
 
   if constexpr (Dim == 0) {
     nx_bnd = n_bnd;
     ny_bnd = 0;
-    nx_local = n_local;
-    nx_local_ghost = n_local + 2 * n_bnd;
-    ny_local = n_global;
-    ny_local_ghost = n_global;
+    nx_local = n_local_deriv;
+    nx_local_ghost = nx_local + 2 * n_bnd;
+    ny_local = n_global_other;
+    ny_local_ghost = ny_local;
   } else {
     nx_bnd = 0;
     ny_bnd = n_bnd;
-    nx_local = n_global;
-    nx_local_ghost = n_global;
-    ny_local = n_local;
-    ny_local_ghost = n_local + 2 * n_bnd;
+    nx_local = n_global_other;
+    nx_local_ghost = nx_local;
+    ny_local = n_local_deriv;
+    ny_local_ghost = ny_local + 2 * n_bnd;
   }
 
   gt::shape_type<2> z_shape(nx_local_ghost, ny_local_ghost);
@@ -425,9 +425,9 @@ void test_deriv(int device_id, uint32_t vendor_id, int world_size,
   gt::ext::gtensor2<double, 2, S> d_dz_numeric(dz_shape);
 
   double ln = 8;
-  double delta = ln / n_global;
+  double delta = ln / n_global_deriv;
   double ln_local = ln / world_size;
-  double scale = n_global / ln;
+  double scale = n_global_deriv / ln;
   auto fn = [](double x, double y) { return x * x * x + y * y; };
   auto fn_dzdx = [](double x, double y) { return 3 * x * x; };
   auto fn_dzdy = [](double x, double y) { return 2 * y; };
@@ -573,23 +573,24 @@ void test_deriv(int device_id, uint32_t vendor_id, int world_size,
 
 template <typename S, int Dim>
 void test_sum(int device_id, uint32_t vendor_id, int world_size, int world_rank,
-              int n_global, int n_iter, int n_warmup = 5)
+              std::size_t n_local_deriv, std::size_t n_global_other, int n_iter,
+              int n_warmup = 5)
 {
   // Note: domain will be n_global x n_global plus ghost points in one dimension
-  const int n_local = n_global / world_size;
+  const std::size_t n_global_deriv = n_local_deriv * world_size;
 
-  int nx_local, ny_local;
+  std::size_t nx_local, ny_local;
 
   struct timespec start, end;
   double iter_time = 0.0;
   double total_time = 0.0;
 
   if constexpr (Dim == 0) {
-    nx_local = n_local;
-    ny_local = n_global;
+    nx_local = n_local_deriv;
+    ny_local = n_global_other;
   } else {
-    nx_local = n_global;
-    ny_local = n_local;
+    nx_local = n_global_other;
+    ny_local = n_local_deriv;
   }
 
   gt::shape_type<2> z_shape(nx_local, ny_local);
@@ -652,12 +653,12 @@ int main(int argc, char** argv)
   using S = gt::space::managed;
 
   // Note: domain will be n_global x n_global plus ghost points in one dimension
-  int n_global = 8 * 1024;
+  std::size_t n_local_deriv = 1024;
   int n_iter = 1000;
   int n_warmup = 10;
 
   if (argc > 1) {
-    n_global = std::atoi(argv[1]) * 1024;
+    n_local_deriv = std::atol(argv[1]);
   }
   if (argc > 2) {
     n_iter = std::atoi(argv[2]);
@@ -671,61 +672,60 @@ int main(int argc, char** argv)
   CHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
   CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &world_rank));
 
-  if (n_global % world_size != 0) {
-    printf("%d nmpi (%d) must be divisor of domain size (%d), exiting\n",
-           world_rank, world_size, n_global);
-    exit(1);
-  }
-
-  const int n_local = n_global / world_size;
+  const std::size_t n_global_deriv = n_local_deriv * world_size;
+  const std::size_t n_global_other = 512 * 1024;
 
   set_rank_device(world_size, world_rank);
   device_id = gt::backend::clib::device_get();
   vendor_id = gt::backend::clib::device_get_vendor_id(device_id);
 
   if (world_rank == 0) {
-    printf("n procs    = %d\n", world_size);
-    printf("n_global   = %d\n", n_global);
-    printf("n_local    = %d\n", n_local);
-    printf("n_iter     = %d\n", n_iter);
-    printf("n_warmup   = %d\n", n_warmup);
+    printf("n procs        = %d\n", world_size);
+    printf("n_global_deriv = %zu\n", n_global_deriv);
+    printf("n_global_other = %zu\n", n_global_other);
+    printf("n_iter         = %d\n", n_iter);
+    printf("n_warmup       = %d\n", n_warmup);
   }
 
   fflush(stdout);
 
   test_deriv<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
-                                   n_global, n_iter, true, 5);
+                                   n_local_deriv, n_global_other, n_iter, true, 5);
   test_deriv<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
-                                   n_global, n_iter, false, 5);
+                                   n_local_deriv, n_global_other, n_iter, false, 5);
 #ifdef TEST_MANAGED
   test_deriv<gt::space::managed, 0>(device_id, vendor_id, world_size,
-                                    world_rank, n_global, n_iter, true, 5);
+                                    world_rank, n_local_deriv, n_global_other,
+                                    n_iter, true, 5);
   test_deriv<gt::space::managed, 0>(device_id, vendor_id, world_size,
-                                    world_rank, n_global, n_iter, false, 5);
+                                    world_rank, n_local_deriv, n_global_other,
+                                    n_iter, false, 5);
 #endif
 
   test_deriv<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
-                                   n_global, n_iter, true, 5);
+                                   n_local_deriv, n_global_other, n_iter, true, 5);
   test_deriv<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
-                                   n_global, n_iter, false, 5);
+                                   n_local_deriv, n_global_other, n_iter, false, 5);
 #ifdef TEST_MANAGED
   test_deriv<gt::space::managed, 1>(device_id, vendor_id, world_size,
-                                    world_rank, n_global, n_iter, true, 5);
+                                    world_rank, n_local_deriv, n_global_other,
+                                    n_iter, true, 5);
   test_deriv<gt::space::managed, 1>(device_id, vendor_id, world_size,
-                                    world_rank, n_global, n_iter, false, 5);
+                                    world_rank, n_local_deriv, n_global_other,
+                                    n_iter, false, 5);
 #endif
 
   test_sum<gt::space::device, 0>(device_id, vendor_id, world_size, world_rank,
-                                 n_global, n_iter, 5);
+                                 n_local_deriv, n_global_other, n_iter, 5);
 #ifdef TEST_MANAGED
   test_sum<gt::space::managed, 0>(device_id, vendor_id, world_size, world_rank,
-                                  n_global, n_iter, 5);
+                                  n_local_deriv, n_global_other, n_iter, 5);
 #endif
   test_sum<gt::space::device, 1>(device_id, vendor_id, world_size, world_rank,
-                                 n_global, n_iter, 5);
+                                 n_local_deriv, n_global_other, n_iter, 5);
 #ifdef TEST_MANAGED
   test_sum<gt::space::managed, 1>(device_id, vendor_id, world_size, world_rank,
-                                  n_global, n_iter, 5);
+                                  n_local_deriv, n_global_other, n_iter, 5);
 #endif
 
   MPI_Finalize();

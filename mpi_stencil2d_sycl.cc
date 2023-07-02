@@ -210,11 +210,11 @@ sycl::queue get_rank_queue(int n_ranks, int rank)
 
 // exchange in first dimension, staging into contiguous buffers on device
 void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
-                         sycl::queue& q, int n_global, int n_local, int n_bnd,
+                         sycl::queue& q, int nx, int ny, int n_bnd,
                          double* d_z, bool stage_host = false)
 {
-  int n_local_with_ghost = n_local + 2 * n_bnd;
-  int buf_size = n_bnd * n_global;
+  int nx_local_with_ghost = nx + 2 * n_bnd;
+  int buf_size = n_bnd * ny;
   static double* sbuf_l = nullptr;
   static double* sbuf_r = nullptr;
   static double* rbuf_l = nullptr;
@@ -248,14 +248,14 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
   if (rank_l >= 0) {
     // printf("rank_l = %d\n", rank_l); fflush(nullptr);
     // sbuf_l = d_z.view(_all, _s(n_bnd, 2 * n_bnd));
-    auto e = buf_from_view(q, n_global, n_bnd, sbuf_l, n_local_with_ghost, d_z,
+    auto e = buf_from_view(q, ny, n_bnd, sbuf_l, nx_local_with_ghost, d_z,
                            n_bnd, 2 * n_bnd);
     if (stage_host) {
       q.copy(sbuf_l, h_sbuf_l, buf_size, e);
       /*
       for (int i = 0; i < n_bnd; i++) {
-        for (int j = 0; j < n_global; j++) {
-          int idx = idx2(n_global, j, i);
+        for (int j = 0; j < ny; j++) {
+          int idx = idx2(ny, j, i);
           printf("sbuf_l[%d, %d] = %f\n", j, i, h_sbuf_l[idx]);
           fflush(nullptr);
         }
@@ -266,14 +266,14 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
   if (rank_r < world_size) {
     // printf("rank_r = %d\n", rank_r); fflush(nullptr);
     // sbuf_r = d_z.view(_all, _s(-2 * n_bnd, -n_bnd));
-    auto e = buf_from_view(q, n_global, n_bnd, sbuf_r, n_local_with_ghost, d_z,
-                           n_local, n_local + n_bnd);
+    auto e = buf_from_view(q, ny, n_bnd, sbuf_r, nx_local_with_ghost, d_z,
+                           nx, nx + n_bnd);
     if (stage_host) {
       q.copy(sbuf_r, h_sbuf_r, buf_size, e);
       /*
       for (int i = 0; i < n_bnd; i++) {
-        for (int j = 0; j < n_global; j++) {
-          int idx = idx2(n_global, j, i);
+        for (int j = 0; j < ny; j++) {
+          int idx = idx2(ny, j, i);
           printf("sbuf_r[%d, %d] = %f\n", j, i, h_sbuf_r[idx]);
           fflush(nullptr);
         }
@@ -337,8 +337,8 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
     if (stage_host) {
       /*
       for (int i = 0; i < n_bnd; i++) {
-        for (int j = 0; j < n_global; j++) {
-          int idx = idx2(n_global, j, i);
+        for (int j = 0; j < ny; j++) {
+          int idx = idx2(ny, j, i);
           printf("rbuf_l[%d, %d] = %f\n", j, i, h_rbuf_l[idx]);
           fflush(nullptr);
         }
@@ -347,7 +347,7 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
       q.copy(h_rbuf_l, rbuf_l, buf_size);
     }
     // d_z.view(_all, _s(0, n_bnd)) = rbuf_l;
-    buf_to_view(q, n_global, n_local_with_ghost, d_z, n_bnd, rbuf_l, 0, n_bnd);
+    buf_to_view(q, ny, nx_local_with_ghost, d_z, n_bnd, rbuf_l, 0, n_bnd);
   }
   if (rank_r < world_size) {
     mpi_rval = MPI_Waitall(2, req_r, MPI_STATUSES_IGNORE);
@@ -357,8 +357,8 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
     if (stage_host) {
       /*
       for (int i = 0; i < n_bnd; i++) {
-        for (int j = 0; j < n_global; j++) {
-          int idx = idx2(n_global, j, i);
+        for (int j = 0; j < ny; j++) {
+          int idx = idx2(ny, j, i);
           printf("rbuf_r[%d, %d] = %f\n", j, i, h_rbuf_r[idx]);
           fflush(nullptr);
         }
@@ -367,8 +367,8 @@ void boundary_exchange_x(MPI_Comm comm, int world_size, int rank,
       q.copy(h_rbuf_r, rbuf_r, buf_size);
     }
     // d_z.view(_all, _s(-n_bnd, _)) = rbuf_r;
-    buf_to_view(q, n_global, n_local_with_ghost, d_z, n_bnd, rbuf_r,
-                n_local + n_bnd, n_local + 2 * n_bnd);
+    buf_to_view(q, ny, nx_local_with_ghost, d_z, n_bnd, rbuf_r,
+                nx + n_bnd, nx + 2 * n_bnd);
   }
 
   q.wait();
@@ -381,13 +381,13 @@ int main(int argc, char** argv)
   // return EXIT_SUCCESS;
 
   // Note: domain will be n_global x n_global plus ghost points in one dimension
-  int n_global = 8 * 1024;
+  std::size_t nx_local = 1024;
   bool stage_host = false;
   int n_iter = 100;
   int n_warmup = 5;
 
   if (argc > 1) {
-    n_global = std::atoi(argv[1]) * 1024;
+    nx_local = std::atol(argv[1]);
   }
   if (argc > 2) {
     if (argv[2][0] == '1') {
@@ -408,14 +408,9 @@ int main(int argc, char** argv)
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-  if (n_global % world_size != 0) {
-    printf("%d nmpi (%d) must be divisor of domain size (%d), exiting\n",
-           world_rank, world_size, n_global);
-    exit(1);
-  }
-
-  const int n_local = n_global / world_size;
-  const int n_local_with_ghost = n_local + 2 * n_bnd;
+  const std::size_t ny = 512 * 1024;
+  const std::size_t nx_global = nx_local * world_size;
+  const std::size_t nx_local_with_ghost = nx_local + 2 * n_bnd;
 
   sycl::queue q = get_rank_queue(world_size, world_rank);
   auto dev = q.get_device();
@@ -431,15 +426,16 @@ int main(int argc, char** argv)
   if (world_rank == 0) {
     printf("n procs    = %d\n", world_size);
     printf("rank       = %d\n", world_rank);
-    printf("n_global   = %d\n", n_global);
-    printf("n_local    = %d\n", n_local);
+    printf("ny         = %zu\n", ny);
+    printf("nx_global  = %zu\n", nx_global);
+    printf("nx_local   = %zu\n", nx_local);
     printf("n_iter     = %d\n", n_iter);
     printf("n_warmup   = %d\n", n_warmup);
     printf("stage_host = %d\n", stage_host);
   }
 
-  int z_size = n_local_with_ghost * n_global;
-  int dzdx_size = n_local * n_global;
+  std::size_t z_size = nx_local_with_ghost * ny;
+  std::size_t dzdx_size = nx_local * ny;
 
   double* h_z = sycl::malloc_host<double>(z_size, q);
   double* d_z = sycl::malloc_device<double>(z_size, q);
@@ -449,53 +445,66 @@ int main(int argc, char** argv)
   double* d_dzdx_numeric = sycl::malloc_device<double>(dzdx_size, q);
 
   double lx = 8;
-  double dx = lx / n_global;
+  double dx = lx / nx_global;
   double lx_local = lx / world_size;
-  double scale = n_global / lx;
+  double scale = nx_global / lx;
   auto fn = [](double x, double y) { return x * x * x + y * y; };
   auto fn_dzdx = [](double x, double y) { return 3 * x * x; };
+
+  if (world_rank == 0) {
+    constexpr std::size_t MB = 1024 * 1024;
+    constexpr std::size_t GB = 1024 * 1024 * 1024;
+    std::size_t buf_size = n_bnd * ny;
+    double dev_bytes = (z_size + dzdx_size + 4 * buf_size) * sizeof(double);
+
+    if (dev_bytes > GB) {
+      std::cout << "dev bytes  = " << dev_bytes / GB << " GB" << std::endl;
+    } else {
+      std::cout << "dev bytes  = " << dev_bytes / MB << " MB" << std::endl;
+    }
+  }
 
   struct timespec start, end;
   double iter_time = 0.0;
   double total_time = 0.0;
 
   double x_start = world_rank * lx_local;
-  for (int j = 0; j < n_global; j++) {
+  for (int j = 0; j < ny; j++) {
     double ytmp = j * dx;
-    for (int i = 0; i < n_local; i++) {
+    for (int i = 0; i < nx_local; i++) {
       double xtmp = x_start + i * dx;
-      h_z[idx2(n_local_with_ghost, i + n_bnd, j)] = fn(xtmp, ytmp);
-      h_dzdx_actual[idx2(n_local, i, j)] = fn_dzdx(xtmp, ytmp);
+      h_z[idx2(nx_local_with_ghost, i + n_bnd, j)] = fn(xtmp, ytmp);
+      h_dzdx_actual[idx2(nx_local, i, j)] = fn_dzdx(xtmp, ytmp);
     }
   }
 
   // fill boundary points on ends
   if (world_rank == 0) {
-    for (int j = 0; j < n_global; j++) {
+    for (int j = 0; j < ny; j++) {
       double ytmp = j * dx;
       for (int i = 0; i < n_bnd; i++) {
         double xtmp = (i - n_bnd) * dx;
-        h_z[idx2(n_local_with_ghost, i, j)] = fn(xtmp, ytmp);
+        h_z[idx2(nx_local_with_ghost, i, j)] = fn(xtmp, ytmp);
       }
     }
   }
   if (world_rank == world_size - 1) {
-    for (int j = 0; j < n_global; j++) {
+    for (int j = 0; j < ny; j++) {
       double ytmp = j * dx;
       for (int i = 0; i < n_bnd; i++) {
         double xtmp = lx + i * dx;
-        h_z[idx2(n_local_with_ghost, n_bnd + n_local + i, j)] = fn(xtmp, ytmp);
+        h_z[idx2(nx_local_with_ghost, n_bnd + nx_local + i, j)] = fn(xtmp, ytmp);
       }
     }
   }
 
   /*
   for (int i = 0; i < 5; i++) {
-    int idx = idx2(n_global, 1, i);
+    int idx = idx2(ny, 1, i);
     printf("%d row1-l %f\n", world_rank, h_z[idx]);
   }
   for (int i = 0; i < 5; i++) {
-    int idx = idx2(n_global, 1, n_local_with_ghost - 1 - i);
+    int idx = idx2(ny, 1, nx_local_with_ghost - 1 - i);
     printf("%d row1-r %f\n", world_rank, h_z[idx]);
   }
   */
@@ -504,8 +513,8 @@ int main(int argc, char** argv)
 
   for (int i = 0; i < n_warmup + n_iter; i++) {
     clock_gettime(CLOCK_MONOTONIC, &start);
-    boundary_exchange_x(MPI_COMM_WORLD, world_size, world_rank, q, n_global,
-                        n_local, n_bnd, d_z, stage_host);
+    boundary_exchange_x(MPI_COMM_WORLD, world_size, world_rank, q, nx_local,
+                        ny, n_bnd, d_z, stage_host);
     clock_gettime(CLOCK_MONOTONIC, &end);
     iter_time =
       ((end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) * 1.0e-9);
@@ -515,7 +524,7 @@ int main(int argc, char** argv)
     }
 
     // do some calculation, to try to more closely simulate what happens in GENE
-    auto e = stencil2d_1d_5(q, n_local, n_global, d_dzdx_numeric, d_z, scale);
+    auto e = stencil2d_1d_5(q, nx_local, ny, d_dzdx_numeric, d_z, scale);
     e.wait();
   }
   printf("%d/%d exchange time %0.8f ms\n", world_rank, world_size,
@@ -525,12 +534,12 @@ int main(int argc, char** argv)
 
   /*
   for (int i = 0; i < 5; i++) {
-    int idx = idx2(n_global, 8, i);
+    int idx = idx2(ny, 8, i);
     printf("%d la %f\n%d ln %f\n", world_rank, h_dzdx_actual[idx], world_rank,
            h_dzdx_numeric[idx]);
   }
   for (int i = 0; i < 5; i++) {
-    int idx = idx2(n_global, 8, n_local - 1 - i);
+    int idx = idx2(ny, 8, nx_local - 1 - i);
     printf("%d ra %f\n%d rn %f\n", world_rank, h_dzdx_actual[idx], world_rank,
            h_dzdx_numeric[idx]);
   }
